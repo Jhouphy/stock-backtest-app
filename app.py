@@ -348,149 +348,148 @@ def check_vcp(df: pd.DataFrame) -> dict:
 
 def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     """
-    支援多種投入方式的回測引擎：
-    - inv_cfg["initial"]      : 初始資金
-    - inv_cfg["mode"]         : "lump_sum" | "dca"
-    - inv_cfg["dca_amount"]   : 每期定投金額（DCA 模式）
-    - inv_cfg["dca_day"]      : 每月幾日投入（DCA 模式）
-    - inv_cfg["buy_mode"]     : "all_in" | "fixed_amount" | "fixed_pct"
-    - inv_cfg["buy_amount"]   : 每次買入固定金額
-    - inv_cfg["buy_pct"]      : 每次買入比例 (0~1)
-    - inv_cfg["sell_mode"]    : "all_out" | "fixed_amount" | "fixed_pct"
-    - inv_cfg["sell_amount"]  : 每次賣出固定金額（市值）
-    - inv_cfg["sell_pct"]     : 每次賣出比例 (0~1)
+    三資金池完全獨立的回測引擎：
+
+    ┌─────────────────────────────────────────────────────┐
+    │ Pool A │ 初始資金池  │ 回測第一天全額買入，永遠持有   │
+    │ Pool B │ DCA 資金池  │ 每期定投，立即買入，永遠持有   │
+    │ Pool C │ 信號資金池  │ 初始為 0；賣出所得存入；       │
+    │        │             │ 等到買入信號時依設定買入        │
+    └─────────────────────────────────────────────────────┘
+
+    Pool A + Pool B = 買入持有基準（不受策略影響）
+    Pool C = 策略操作的唯一資金，從不混入 A/B
     """
-    c              = df["Close"].squeeze()
-    initial        = inv_cfg["initial"]
-    mode           = inv_cfg.get("mode", "lump_sum")
-    dca_amount     = inv_cfg.get("dca_amount", 0)
-    dca_freq       = inv_cfg.get("dca_freq", 1)   # 每月幾次（1/2/4）
-    buy_mode       = inv_cfg.get("buy_mode", "all_in")
-    buy_amount     = inv_cfg.get("buy_amount", initial)
-    buy_pct        = inv_cfg.get("buy_pct", 1.0)
-    sell_mode      = inv_cfg.get("sell_mode", "all_out")
-    sell_amount    = inv_cfg.get("sell_amount", 0)
-    sell_pct       = inv_cfg.get("sell_pct", 1.0)
+    c          = df["Close"].squeeze()
+    initial    = inv_cfg["initial"]
+    mode       = inv_cfg.get("mode", "lump_sum")
+    dca_amount = inv_cfg.get("dca_amount", 0)
+    dca_freq   = inv_cfg.get("dca_freq", 1)
+    buy_mode   = inv_cfg.get("buy_mode", "all_in")
+    buy_amount = inv_cfg.get("buy_amount", initial)
+    buy_pct    = inv_cfg.get("buy_pct", 1.0)
+    sell_mode  = inv_cfg.get("sell_mode", "all_out")
+    sell_amount= inv_cfg.get("sell_amount", 0)
+    sell_pct   = inv_cfg.get("sell_pct", 1.0)
 
-    capital        = float(initial)
-    position       = 0.0
-    in_market      = False
+    # ── Pool A：初始資金，第一天全買，永不動 ──
+    pos_a          = float(initial) / float(c.iloc[0])
     total_invested = float(initial)
-    dca_invested   = 0.0
-    portfolio_values    = []
-    invested_values     = []
-    buy_dates,  sell_dates  = [], []   # 策略信號買賣
-    buy_prices, sell_prices = [], []
-    dca_buy_dates  = []                # DCA 定投（獨立追蹤）
-    dca_buy_prices = []
-    buy_amounts_list = []
 
-    # ── 預先計算 DCA 注入日期（基於真實交易日曆，確保每期都觸發）──
+    # ── Pool B：DCA，每期加碼，永不動 ──
+    pos_b        = 0.0
+    dca_invested = 0.0
+
+    # ── Pool C：信號資金池，初始為 0 ──
+    # 使用者若想讓策略有初始子彈，可把 signal_seed 設為非 0
+    # 目前設計：池子從空開始，等第一個賣出信號才有錢
+    # 但為了讓策略能在「有持倉可賣」時運作，
+    # 我們讓 Pool C 也在第一天複製初始持倉（影子倉位），
+    # 然後等第一個賣出信號才真正賣出並將資金放入 signal_cash
+    pos_c         = float(initial) / float(c.iloc[0])  # 初始影子持倉（與 A 相同）
+    signal_cash   = 0.0   # 信號資金（賣出後存入，等買入信號再用）
+    signal_invested = float(initial)   # 計入總投入（Pool C 初始也算投入）
+    c_in_market   = True   # Pool C 一開始就持倉
+
+    portfolio_values = []
+    invested_values  = []
+    buy_dates,  sell_dates  = [], []
+    buy_prices, sell_prices = [], []
+    dca_buy_dates  = []
+    dca_buy_prices = []
+
+    # ── 預先計算 DCA 日期 ──
     trading_days = df.index
-    dca_dates = set()
+    dca_dates    = set()
     if mode == "dca" and dca_amount > 0:
         if dca_freq == 1:
-            # 每月第一個交易日
-            seen_months = set()
+            seen = set()
             for d in trading_days:
                 ym = (d.year, d.month)
-                if ym not in seen_months:
-                    dca_dates.add(d)
-                    seen_months.add(ym)
+                if ym not in seen:
+                    dca_dates.add(d); seen.add(ym)
         elif dca_freq == 2:
-            # 每月第一個交易日 + 最接近 16 號的交易日
-            first_of_month = {}
+            fm, sm = {}, {}
             for d in trading_days:
                 ym = (d.year, d.month)
-                if ym not in first_of_month:
-                    first_of_month[ym] = d
-            second_of_month = {}
-            for d in trading_days:
-                ym = (d.year, d.month)
-                if ym not in second_of_month and d.day >= 15:
-                    second_of_month[ym] = d
-            dca_dates = set(first_of_month.values()) | set(second_of_month.values())
+                if ym not in fm: fm[ym] = d
+                if ym not in sm and d.day >= 15: sm[ym] = d
+            dca_dates = set(fm.values()) | set(sm.values())
         elif dca_freq == 4:
-            # 每 5 個交易日（週投）
             dca_dates = set(trading_days[::5])
 
     for i, (idx, row) in enumerate(df.iterrows()):
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
 
-        # ══ DCA：定投日直接買股，獨立追蹤，不混入策略信號清單 ══
+        # ══ Pool B：DCA 定投日直接買股 ══
         if mode == "dca" and dca_amount > 0 and idx in dca_dates:
+            pos_b        += dca_amount / price
+            dca_invested += dca_amount
             total_invested += dca_amount
-            dca_invested   += dca_amount
-            position       += dca_amount / price
-            in_market       = True
             dca_buy_dates.append(idx)
             dca_buy_prices.append(price)
 
-        # ══ 策略買入信號：用可用現金依倉位設定買入 ══
-        if signal == 1 and capital > 1.0:
-            if buy_mode == "all_in":
-                use_cash = capital
-            elif buy_mode == "fixed_amount":
-                use_cash = min(buy_amount, capital)
-            else:
-                use_cash = capital * buy_pct
-            if use_cash > 1.0:
-                position  += use_cash / price
-                capital   -= use_cash
-                in_market  = True
-                buy_dates.append(idx)
-                buy_prices.append(price)
-
-        # ══ 策略賣出信號：賣出持倉，所得放回 capital ══
-        elif signal == -1 and in_market and position > 1e-6:
+        # ══ Pool C：策略賣出 ══
+        if signal == -1 and c_in_market and pos_c > 1e-6:
             if sell_mode == "all_out":
-                sell_shares = position
+                sell_shares = pos_c
             elif sell_mode == "fixed_amount":
-                sell_shares = min(sell_amount / price, position)
+                sell_shares = min(sell_amount / price, pos_c)
             else:
-                sell_shares = position * sell_pct
-            proceeds  = sell_shares * price
-            position -= sell_shares
-            capital  += proceeds
-            if position < 1e-6:
-                in_market = False
+                sell_shares = pos_c * sell_pct
+            proceeds     = sell_shares * price
+            pos_c       -= sell_shares
+            signal_cash += proceeds
+            if pos_c < 1e-6:
+                c_in_market = False
             sell_dates.append(idx)
             sell_prices.append(price)
 
-        # ══ 賣出後若有閒置現金 & 無重新買入信號：DCA 模式自動再投入 ══
-        # 避免「賣出後資金永遠閒置」的問題——有現金就用策略設定再買
-        if mode == "dca" and capital > 1.0 and in_market and signal != 1:
-            reinvest = capital  # 全部閒置現金立即再買（維持滿倉精神）
-            position += reinvest / price
-            capital  -= reinvest
+        # ══ Pool C：策略買入（只用 signal_cash，與 A/B 完全無關）══
+        if signal == 1 and signal_cash > 1.0:
+            if buy_mode == "all_in":
+                use_cash = signal_cash
+            elif buy_mode == "fixed_amount":
+                use_cash = min(buy_amount, signal_cash)
+            else:
+                use_cash = signal_cash * buy_pct
+            if use_cash > 1.0:
+                pos_c       += use_cash / price
+                signal_cash -= use_cash
+                c_in_market  = True
+                buy_dates.append(idx)
+                buy_prices.append(price)
 
-        portfolio_values.append(capital + position * price)
-        invested_values.append(total_invested)
+        # ══ 組合總價值 = A + B + C持倉 + C現金 ══
+        total_val = (pos_a * price) + (pos_b * price) + (pos_c * price) + signal_cash
+        portfolio_values.append(total_val)
+        invested_values.append(total_invested + signal_invested)
 
-    final_value   = capital + position * float(c.iloc[-1])
-    ps            = pd.Series(portfolio_values, index=df.index)
-    inv_series    = pd.Series(invested_values,  index=df.index)
-    years         = (df.index[-1] - df.index[0]).days / 365.25
-    total_return  = (final_value - total_invested) / total_invested
-    cagr          = (final_value / total_invested) ** (1 / max(years, 0.01)) - 1
-    drawdown      = (ps - ps.cummax()) / ps.cummax()
+    final_value  = ((pos_a + pos_b + pos_c) * float(c.iloc[-1])) + signal_cash
+    true_invested = total_invested + signal_invested
+    ps           = pd.Series(portfolio_values, index=df.index)
+    inv_series   = pd.Series(invested_values,  index=df.index)
+    years        = (df.index[-1] - df.index[0]).days / 365.25
+    total_return = (final_value - true_invested) / true_invested
+    cagr         = (final_value / true_invested) ** (1 / max(years, 0.01)) - 1
+    drawdown     = (ps - ps.cummax()) / ps.cummax()
 
     return {
         "portfolio_series": ps,
         "invested_series":  inv_series,
         "final_value":      final_value,
-        "total_invested":   total_invested,
+        "total_invested":   true_invested,
         "dca_invested":     dca_invested,
         "total_return":     total_return,
         "cagr":             cagr,
         "max_drawdown":     float(drawdown.min()),
         "drawdown_series":  drawdown,
-        "buy_dates":        buy_dates,       # 策略信號買入
+        "buy_dates":        buy_dates,
         "sell_dates":       sell_dates,
         "buy_prices":       buy_prices,
         "sell_prices":      sell_prices,
-        "dca_buy_dates":    dca_buy_dates,   # DCA 定投（獨立）
+        "dca_buy_dates":    dca_buy_dates,
         "dca_buy_prices":   dca_buy_prices,
     }
 
@@ -940,7 +939,8 @@ def main():
     st.markdown("---")
 
     st.markdown("#### 📊 績效指標對比")
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+    m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+    m7.metric("B&H 最終價值", f"${float(benchmark.iloc[-1]):,.0f}")
     m1.metric("策略總報酬 (on投入)", f"{result['total_return']:+.2%}", delta=f"vs B&H {bh_return:+.2%}")
     m2.metric("策略 CAGR",  f"{result['cagr']:+.2%}",         delta=f"vs B&H {bh_cagr:+.2%}")
     m3.metric("策略最大回撤", f"{result['max_drawdown']:.2%}", delta=f"vs B&H {bh_dd:.2%}", delta_color="inverse")
@@ -948,10 +948,9 @@ def main():
     n_sig_buy = len(result["buy_dates"])
     n_dca     = len(result["dca_buy_dates"])
     n_sell    = len(result["sell_dates"])
-    trade_label = (f"DCA {n_dca}次 ＋ 信號買 {n_sig_buy}次 / 信號賣 {n_sell}次"
-                   if is_dca else f"信號買 {n_sig_buy}次 / 信號賣 {n_sell}次")
-    m5.metric("交易次數", trade_label)
-    m6.metric("B&H 最終價值", f"${float(benchmark.iloc[-1]):,.0f}")
+    # 拆成 7 個欄位：原 m1~m4 不變，m5=DCA次數，m6=信號買賣，m7=B&H最終
+    m5.metric("DCA 定投次數", f"{n_dca} 次" if is_dca else "—")
+    m6.metric("信號買 / 賣", f"{n_sig_buy} 買 / {n_sell} 賣")
     st.markdown("---")
 
     tab1, tab2, tab3 = st.tabs(["📈 資產增長曲線", "🕯️ K線圖與買賣標記", "📉 回撤分析"])
