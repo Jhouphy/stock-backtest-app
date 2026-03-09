@@ -26,106 +26,178 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap');
 
+/* ── 全域背景：乾淨白底 ── */
 .stApp {
-    background: #0a0e17;
-    color: #e2e8f0;
-    font-family: 'DM Sans', sans-serif;
+    background: #f8fafc;
+    color: #1e293b;
+    font-family: 'Inter', sans-serif;
 }
+
+/* ── 側邊欄：淺灰底帶左邊框 ── */
 [data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0d1321 0%, #111827 100%);
-    border-right: 1px solid #1e293b;
+    background: #ffffff;
+    border-right: 2px solid #e2e8f0;
 }
 [data-testid="stSidebar"] .stMarkdown h3 {
-    color: #38bdf8;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.75rem;
-    letter-spacing: 0.15em;
+    color: #0369a1;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 0.18em;
     text-transform: uppercase;
+    margin-bottom: 0.4rem;
 }
+
+/* ── 主標題 ── */
 .main-title {
-    font-family: 'Space Mono', monospace;
-    font-size: 2rem;
+    font-family: 'Inter', sans-serif;
+    font-size: 1.9rem;
     font-weight: 700;
-    background: linear-gradient(135deg, #38bdf8 0%, #818cf8 50%, #e879f9 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-    margin-bottom: 0.2rem;
+    color: #0f172a;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.1rem;
+}
+.main-title span {
+    color: #0369a1;
 }
 .subtitle {
-    color: #64748b;
-    font-size: 0.9rem;
+    color: #94a3b8;
+    font-size: 0.85rem;
+    font-family: 'IBM Plex Mono', monospace;
+    letter-spacing: 0.04em;
     margin-bottom: 1.5rem;
 }
+
+/* ── Metric 卡片 ── */
 [data-testid="stMetric"] {
-    background: linear-gradient(135deg, #111827 0%, #1e293b 100%);
-    border: 1px solid #1e293b;
-    border-radius: 12px;
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-top: 3px solid #0369a1;
+    border-radius: 10px;
     padding: 1rem 1.2rem;
-    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-    transition: border-color 0.2s;
+    box-shadow: 0 1px 8px rgba(0,0,0,0.06);
+    transition: box-shadow 0.2s, border-top-color 0.2s;
 }
-[data-testid="stMetric"]:hover { border-color: #38bdf8; }
+[data-testid="stMetric"]:hover {
+    box-shadow: 0 4px 20px rgba(3,105,161,0.12);
+    border-top-color: #0ea5e9;
+}
 [data-testid="stMetricLabel"] {
-    color: #64748b !important;
-    font-size: 0.72rem !important;
+    color: #94a3b8 !important;
+    font-size: 0.68rem !important;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    font-family: 'Space Mono', monospace !important;
+    letter-spacing: 0.12em;
+    font-family: 'IBM Plex Mono', monospace !important;
 }
 [data-testid="stMetricValue"] {
-    color: #f1f5f9 !important;
-    font-family: 'Space Mono', monospace !important;
-    font-size: 1.5rem !important;
+    color: #0f172a !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 1.45rem !important;
+    font-weight: 600 !important;
 }
 [data-testid="stMetricDelta"] {
-    font-family: 'Space Mono', monospace !important;
-    font-size: 0.8rem !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 0.75rem !important;
 }
+
+/* ── 策略標籤 ── */
 .strategy-badge {
     display: inline-block;
-    background: linear-gradient(135deg, #0f172a, #1e293b);
-    border: 1px solid #38bdf8;
-    color: #38bdf8;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.7rem;
-    padding: 3px 10px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    color: #1d4ed8;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.68rem;
+    padding: 3px 12px;
     border-radius: 20px;
     letter-spacing: 0.1em;
     margin-bottom: 0.8rem;
+    font-weight: 600;
 }
+
+/* ── VCP 通過/未通過 ── */
 .vcp-pass {
-    background: linear-gradient(135deg, #052e16, #064e3b);
-    border: 1px solid #10b981;
-    border-radius: 10px;
-    padding: 0.8rem 1rem;
-    color: #34d399;
-    font-family: 'Space Mono', monospace;
+    background: #f0fdf4;
+    border: 1px solid #86efac;
+    border-left: 4px solid #22c55e;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    color: #15803d;
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 0.75rem;
 }
 .vcp-fail {
-    background: linear-gradient(135deg, #1c0a0a, #2d1515);
-    border: 1px solid #ef4444;
-    border-radius: 10px;
-    padding: 0.8rem 1rem;
-    color: #f87171;
-    font-family: 'Space Mono', monospace;
+    background: #fff7ed;
+    border: 1px solid #fdba74;
+    border-left: 4px solid #f97316;
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    color: #c2410c;
+    font-family: 'IBM Plex Mono', monospace;
     font-size: 0.75rem;
 }
+
+/* ── 執行按鈕 ── */
 .stButton > button {
-    background: linear-gradient(135deg, #0369a1, #7c3aed);
-    color: white;
+    background: #0369a1;
+    color: #ffffff;
     border: none;
     border-radius: 8px;
-    font-family: 'Space Mono', monospace;
-    font-size: 0.8rem;
-    padding: 0.6rem 1.5rem;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 600;
+    padding: 0.65rem 1.5rem;
     width: 100%;
-    transition: opacity 0.2s;
+    transition: background 0.2s, box-shadow 0.2s;
+    letter-spacing: 0.02em;
 }
-.stButton > button:hover { opacity: 0.85; }
+.stButton > button:hover {
+    background: #0284c7;
+    box-shadow: 0 4px 14px rgba(3,105,161,0.3);
+}
+
+/* ── Tab ── */
+[data-testid="stTab"] button {
+    font-family: 'Inter', sans-serif;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: #64748b;
+}
+[data-testid="stTab"] button[aria-selected="true"] {
+    color: #0369a1;
+    border-bottom-color: #0369a1;
+}
+
+/* ── Expander ── */
+[data-testid="stExpander"] {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+}
+
+/* ── Dataframe ── */
+[data-testid="stDataFrame"] {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+/* ── Info box ── */
+.stAlert {
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
+}
+
+/* ── Input / Select ── */
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input {
+    font-family: 'IBM Plex Mono', monospace;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 6px;
+    color: #0f172a;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -296,25 +368,26 @@ def compute_benchmark(df: pd.DataFrame, initial_capital: float) -> pd.Series:
 # ═══════════════════════════════════════════════════════
 # 圖表
 # ═══════════════════════════════════════════════════════
-CHART = dict(paper_bgcolor="#0a0e17", plot_bgcolor="#0d1321",
-             font=dict(color="#94a3b8", family="Space Mono, monospace", size=11),
-             gridcolor="#1e293b")
+CHART = dict(paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+             font=dict(color="#475569", family="IBM Plex Mono, monospace", size=11),
+             gridcolor="#e2e8f0")
 
 def plot_equity(portfolio, benchmark, strategy_name, initial_capital):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
-        name="買入持有 (B&H)", line=dict(color="#64748b", width=1.5, dash="dot")))
+        name="買入持有 (B&H)", line=dict(color="#94a3b8", width=1.5, dash="dot")))
     fig.add_trace(go.Scatter(x=portfolio.index, y=portfolio.values,
-        name=strategy_name, line=dict(color="#38bdf8", width=2.5),
-        fill="tozeroy", fillcolor="rgba(56,189,248,0.05)"))
-    fig.add_hline(y=initial_capital, line_dash="dash", line_color="#374151",
-                  line_width=1, annotation_text="初始資金", annotation_font_color="#64748b")
-    fig.update_layout(title=dict(text="📊 資產增長曲線對比", font=dict(size=14, color="#e2e8f0")),
+        name=strategy_name, line=dict(color="#0369a1", width=2.5),
+        fill="tozeroy", fillcolor="rgba(3,105,161,0.07)"))
+    fig.add_hline(y=initial_capital, line_dash="dash", line_color="#cbd5e1",
+                  line_width=1, annotation_text="初始資金", annotation_font_color="#94a3b8")
+    fig.update_layout(title=dict(text="📊 資產增長曲線對比", font=dict(size=14, color="#0f172a")),
         xaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"]),
         yaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"], tickprefix="$", tickformat=",.0f"),
         paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"],
         font=CHART["font"], hovermode="x unified", height=400,
-        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        legend=dict(bgcolor="rgba(255,255,255,0.8)", bordercolor="#e2e8f0", borderwidth=1,
+                    orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=10,r=10,t=50,b=10))
     return fig
 
@@ -331,57 +404,58 @@ def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, se
     fig.add_trace(go.Candlestick(x=df.index,
         open=df["Open"].squeeze(), high=df["High"].squeeze(),
         low=df["Low"].squeeze(), close=c, name="K線",
-        increasing_line_color="#10b981", decreasing_line_color="#f87171",
-        increasing_fillcolor="#052e16", decreasing_fillcolor="#2d1515"), row=1, col=1)
+        increasing_line_color="#16a34a", decreasing_line_color="#dc2626",
+        increasing_fillcolor="#bbf7d0", decreasing_fillcolor="#fecaca"), row=1, col=1)
 
     if strategy == "MA 交叉策略":
         fig.add_trace(go.Scatter(x=df.index, y=df[f"MA{params['ma_fast']}"],
-            name=f"MA{params['ma_fast']}", line=dict(color="#38bdf8", width=1.2)), row=1, col=1)
+            name=f"MA{params['ma_fast']}", line=dict(color="#0369a1", width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df[f"MA{params['ma_slow']}"],
-            name=f"MA{params['ma_slow']}", line=dict(color="#e879f9", width=1.2)), row=1, col=1)
+            name=f"MA{params['ma_slow']}", line=dict(color="#7c3aed", width=1.5)), row=1, col=1)
     elif strategy == "布林通道策略":
         fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="BB上軌",
-            line=dict(color="#818cf8", width=1, dash="dot")), row=1, col=1)
+            line=dict(color="#6366f1", width=1, dash="dot")), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df["BB_Mid"], name="BB中軌",
             line=dict(color="#94a3b8", width=1)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df["BB_Lower"], name="BB下軌",
-            line=dict(color="#818cf8", width=1, dash="dot"),
-            fill="tonexty", fillcolor="rgba(129,140,248,0.04)"), row=1, col=1)
+            line=dict(color="#6366f1", width=1, dash="dot"),
+            fill="tonexty", fillcolor="rgba(99,102,241,0.05)"), row=1, col=1)
 
     fig.add_trace(go.Scatter(x=df.index, y=df["MA200"], name="MA200",
-        line=dict(color="#fbbf24", width=1, dash="longdash"), opacity=0.7), row=1, col=1)
+        line=dict(color="#f59e0b", width=1.2, dash="longdash"), opacity=0.9), row=1, col=1)
 
     if buy_dates:
         fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode="markers", name="買入",
-            marker=dict(symbol="triangle-up", color="#10b981", size=12,
+            marker=dict(symbol="triangle-up", color="#16a34a", size=12,
                         line=dict(color="#fff", width=1))), row=1, col=1)
     if sell_dates:
         fig.add_trace(go.Scatter(x=sell_dates, y=sell_prices, mode="markers", name="賣出",
-            marker=dict(symbol="triangle-down", color="#f87171", size=12,
+            marker=dict(symbol="triangle-down", color="#dc2626", size=12,
                         line=dict(color="#fff", width=1))), row=1, col=1)
 
-    vol_colors = ["#10b981" if float(c.iloc[i]) >= float(df["Open"].squeeze().iloc[i])
-                  else "#f87171" for i in range(len(df))]
+    vol_colors = ["#16a34a" if float(c.iloc[i]) >= float(df["Open"].squeeze().iloc[i])
+                  else "#dc2626" for i in range(len(df))]
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"].squeeze(),
-        name="成交量", marker_color=vol_colors, opacity=0.6), row=2, col=1)
+        name="成交量", marker_color=vol_colors, opacity=0.5), row=2, col=1)
 
     if strategy == "RSI 動能策略" and need_sub:
         fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI",
-            line=dict(color="#a78bfa", width=1.5)), row=3, col=1)
-        fig.add_hline(y=params["rsi_buy"], line_dash="dash", line_color="#10b981", row=3, col=1)
-        fig.add_hline(y=params["rsi_sell"], line_dash="dash", line_color="#f87171", row=3, col=1)
+            line=dict(color="#7c3aed", width=1.5)), row=3, col=1)
+        fig.add_hline(y=params["rsi_buy"], line_dash="dash", line_color="#16a34a", row=3, col=1)
+        fig.add_hline(y=params["rsi_sell"], line_dash="dash", line_color="#dc2626", row=3, col=1)
     elif strategy == "MACD 趨勢策略" and need_sub:
-        hist_colors = ["#10b981" if float(v) >= 0 else "#f87171" for v in df["MACD_Hist"].values]
+        hist_colors = ["#16a34a" if float(v) >= 0 else "#dc2626" for v in df["MACD_Hist"].values]
         fig.add_trace(go.Bar(x=df.index, y=df["MACD_Hist"], name="Hist",
-            marker_color=hist_colors, opacity=0.7), row=3, col=1)
+            marker_color=hist_colors, opacity=0.6), row=3, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD",
-            line=dict(color="#38bdf8", width=1.5)), row=3, col=1)
+            line=dict(color="#0369a1", width=1.5)), row=3, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal",
             line=dict(color="#f59e0b", width=1.2)), row=3, col=1)
 
     fig.update_layout(paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"],
         font=CHART["font"], xaxis_rangeslider_visible=False,
-        legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
+        legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#e2e8f0", borderwidth=1,
+                    orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
         hovermode="x unified", height=600 if need_sub else 500,
         margin=dict(l=10,r=10,t=40,b=10))
     for i in range(1, rows+1):
@@ -395,7 +469,7 @@ def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, se
 # ═══════════════════════════════════════════════════════
 
 def main():
-    st.markdown('<div class="main-title">📈 股票回測分析平台</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-title">📈 股票<span>回測</span>分析平台</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Multi-Strategy Backtesting · VCP Screening · Performance Analytics</div>',
                 unsafe_allow_html=True)
 
@@ -521,18 +595,18 @@ def main():
         fig_dd = go.Figure()
         fig_dd.add_trace(go.Scatter(x=result["drawdown_series"].index,
             y=result["drawdown_series"].values * 100, name=strategy,
-            line=dict(color="#f87171", width=1.5),
-            fill="tozeroy", fillcolor="rgba(248,113,113,0.1)"))
+            line=dict(color="#dc2626", width=1.5),
+            fill="tozeroy", fillcolor="rgba(220,38,38,0.08)"))
         fig_dd.add_trace(go.Scatter(x=bh_dd_series.index,
             y=bh_dd_series.values * 100, name="買入持有",
-            line=dict(color="#64748b", width=1.2, dash="dot")))
+            line=dict(color="#94a3b8", width=1.2, dash="dot")))
         fig_dd.update_layout(
-            title=dict(text="📉 策略 vs 買入持有 回撤對比", font=dict(size=14, color="#e2e8f0")),
-            xaxis=dict(showgrid=True, gridcolor="#1e293b"),
-            yaxis=dict(showgrid=True, gridcolor="#1e293b", ticksuffix="%"),
-            paper_bgcolor="#0a0e17", plot_bgcolor="#0d1321", font=CHART["font"],
-            legend=dict(bgcolor="rgba(0,0,0,0)"), hovermode="x unified",
-            height=380, margin=dict(l=10,r=10,t=50,b=10))
+            title=dict(text="📉 策略 vs 買入持有 回撤對比", font=dict(size=14, color="#0f172a")),
+            xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
+            yaxis=dict(showgrid=True, gridcolor="#e2e8f0", ticksuffix="%"),
+            paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc", font=CHART["font"],
+            legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#e2e8f0", borderwidth=1),
+            hovermode="x unified", height=380, margin=dict(l=10,r=10,t=50,b=10))
         st.plotly_chart(fig_dd, use_container_width=True)
 
     with st.expander("📋 查看所有交易明細"):
@@ -554,7 +628,7 @@ def main():
 
     st.markdown("---")
     st.markdown(
-        "<div style='text-align:center;color:#374151;font-family:Space Mono;font-size:0.7rem;'>"
+        "<div style='text-align:center;color:#cbd5e1;font-family:IBM Plex Mono;font-size:0.7rem;'>"
         "數據來源: Yahoo Finance · 本工具僅供學習研究，不構成投資建議</div>",
         unsafe_allow_html=True)
 
