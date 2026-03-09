@@ -368,28 +368,9 @@ def check_vcp(df: pd.DataFrame) -> dict:
             "passed": all([c_a, c_b, c_c, c_d])}
 
 
-def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
-    """
-    4 帳戶完全獨立回測。
-    acc1: 初始資金 + 策略信號（無 DCA）
-    acc2: 初始資金 + DCA + 策略信號
-    acc3/acc4 由 compute_benchmark 計算。
-    """
-    c          = df["Close"].squeeze()
-    initial    = float(inv_cfg["initial"])
-    mode       = inv_cfg.get("mode", "lump_sum")
-    dca_amount = float(inv_cfg.get("dca_amount", 0))
-    dca_freq   = inv_cfg.get("dca_freq", 1)
-    buy_mode   = inv_cfg.get("buy_mode", "all_in")
-    buy_amount = float(inv_cfg.get("buy_amount", initial))
-    buy_pct    = float(inv_cfg.get("buy_pct", 1.0))
-    sell_mode  = inv_cfg.get("sell_mode", "all_out")
-    sell_amount= float(inv_cfg.get("sell_amount", 0))
-    sell_pct   = float(inv_cfg.get("sell_pct", 1.0))
-
-    # ── 預先計算 DCA 日期 ──
-    trading_days = df.index
-    dca_dates    = set()
+def _build_dca_dates(trading_days, dca_amount, dca_freq, mode):
+    """共用：計算 DCA 觸發日期 set"""
+    dca_dates = set()
     if mode == "dca" and dca_amount > 0:
         if dca_freq == 1:
             seen = set()
@@ -405,43 +386,73 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
             dca_dates = set(fm.values()) | set(sm.values())
         elif dca_freq == 4:
             dca_dates = set(trading_days[::5])
+    return dca_dates
 
-    # ── acc1：初始資金 + 策略（無 DCA） ──
-    a1_cash, a1_shares = initial, 0.0
-    a1_invested        = initial
 
-    # ── acc2：初始資金 + DCA + 策略 ──
-    a2_cash, a2_shares = initial, 0.0
-    a2_invested        = initial
-    a2_dca_total       = 0.0
+def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
+    """
+    ┌──────────────────────────────────────────────────────────────────┐
+    │  4 帳戶設計（每月定投金額 = X）                                    │
+    │                                                                  │
+    │  acc1  初始全買股票 │ 每月 X → 現金池 │ 信號才進出現金池            │
+    │  acc2  初始全買股票 │ 每月 X → 直接買股（DCA）                      │
+    │              │ 每月 X → 現金池  │ 信號才進出現金池                  │
+    │  acc3  初始全買股票 │ 每月 2X → 直接買股（B&H，永不賣）             │
+    │  acc4  初始全買股票 │ 永不動                                       │
+    │                                                                  │
+    │  比較邏輯：                                                        │
+    │   acc1 vs acc4 → 信號現金池策略 vs 純持有                         │
+    │   acc2 vs acc3 → DCA+信號策略 vs 純DCA持有（投入金額相同）         │
+    └──────────────────────────────────────────────────────────────────┘
+    """
+    c           = df["Close"].squeeze()
+    initial     = float(inv_cfg["initial"])
+    mode        = inv_cfg.get("mode", "lump_sum")
+    dca_amount  = float(inv_cfg.get("dca_amount", 0))
+    dca_freq    = inv_cfg.get("dca_freq", 1)
+    buy_mode    = inv_cfg.get("buy_mode", "all_in")
+    buy_amount  = float(inv_cfg.get("buy_amount", initial))
+    buy_pct     = float(inv_cfg.get("buy_pct", 1.0))
+    sell_mode   = inv_cfg.get("sell_mode", "all_out")
+    sell_amount = float(inv_cfg.get("sell_amount", 0))
+    sell_pct    = float(inv_cfg.get("sell_pct", 1.0))
 
-    # 追蹤用
-    buy_dates,  sell_dates  = [], []   # acc1 策略信號（代表純策略）
+    dca_dates   = _build_dca_dates(df.index, dca_amount, dca_freq, mode)
+    first_price = float(c.iloc[0])
+
+    # ── acc1：初始全買 + 每月X→現金池 + 信號換手 ──
+    a1_shares   = initial / first_price
+    a1_cash     = 0.0        # 信號現金池（每月X注入，信號買/賣）
+    a1_invested = initial    # 追蹤總投入（含月注入）
+    a1_signal_invested = 0.0 # 現金池累計注入
+
+    # ── acc2：初始全買 + 每月X→直接買股 + 每月X→現金池 + 信號換手 ──
+    a2_shares   = initial / first_price
+    a2_cash     = 0.0        # 信號現金池（每月X注入，信號買/賣）
+    a2_invested = initial
+    a2_dca_shares_invested = 0.0   # DCA 直接買股的累計金額
+    a2_signal_invested     = 0.0   # 現金池累計注入
+
+    # 記錄
+    buy_dates,  sell_dates  = [], []   # acc1 信號記錄（代表純策略）
     buy_prices, sell_prices = [], []
-    dca_buy_dates  = []
-    dca_buy_prices = []
-    a1_vals, a2_vals = [], []
+    dca_buy_dates, dca_buy_prices = [], []
+    a1_vals, a2_vals         = [], []
     a1_inv_vals, a2_inv_vals = [], []
 
     def do_buy(cash, shares, price):
-        if buy_mode == "all_in":
-            use = cash
-        elif buy_mode == "fixed_amount":
-            use = min(buy_amount, cash)
-        else:
-            use = cash * buy_pct
+        if buy_mode == "all_in":   use = cash
+        elif buy_mode == "fixed_amount": use = min(buy_amount, cash)
+        else:                      use = cash * buy_pct
         if use > 1.0:
             shares += use / price
             cash   -= use
         return cash, shares
 
     def do_sell(cash, shares, price):
-        if sell_mode == "all_out":
-            sell_sh = shares
-        elif sell_mode == "fixed_amount":
-            sell_sh = min(sell_amount / price, shares)
-        else:
-            sell_sh = shares * sell_pct
+        if sell_mode == "all_out":        sell_sh = shares
+        elif sell_mode == "fixed_amount": sell_sh = min(sell_amount / price, shares)
+        else:                             sell_sh = shares * sell_pct
         if sell_sh > 1e-6:
             cash   += sell_sh * price
             shares -= sell_sh
@@ -451,15 +462,23 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
 
-        # DCA：只影響 acc2
         if mode == "dca" and dca_amount > 0 and idx in dca_dates:
-            a2_cash     += dca_amount
-            a2_invested += dca_amount
-            a2_dca_total+= dca_amount
+            # acc1：每月 X 注入現金池（不買股，等信號）
+            a1_cash     += dca_amount
+            a1_invested += dca_amount
+            a1_signal_invested += dca_amount
+
+            # acc2：每月 X 直接買股（DCA），另外 X 注入現金池
+            a2_shares   += dca_amount / price          # DCA 直接買
+            a2_cash     += dca_amount                  # 現金池也注入 X
+            a2_invested += dca_amount * 2              # 兩筆都計入投入
+            a2_dca_shares_invested += dca_amount
+            a2_signal_invested     += dca_amount
+
             dca_buy_dates.append(idx)
             dca_buy_prices.append(price)
 
-        # 賣出信號
+        # 賣出信號：從 shares 賣出，所得放入各自現金池
         if signal == -1:
             if a1_shares > 1e-6:
                 a1_cash, a1_shares = do_sell(a1_cash, a1_shares, price)
@@ -467,12 +486,12 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
             if a2_shares > 1e-6:
                 a2_cash, a2_shares = do_sell(a2_cash, a2_shares, price)
 
-        # 買入信號
+        # 買入信號：從各自現金池買入股票
         elif signal == 1:
             if a1_cash > 1.0:
-                prev_shares = a1_shares
+                prev = a1_shares
                 a1_cash, a1_shares = do_buy(a1_cash, a1_shares, price)
-                if a1_shares > prev_shares:
+                if a1_shares > prev:
                     buy_dates.append(idx); buy_prices.append(price)
             if a2_cash > 1.0:
                 a2_cash, a2_shares = do_buy(a2_cash, a2_shares, price)
@@ -497,7 +516,6 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     a2_tr, a2_cagr = perf(a2_final, a2_invested)
 
     return {
-        # acc1 策略（無 DCA）
         "acc1_series":    a1_ps,
         "acc1_final":     a1_final,
         "acc1_invested":  a1_invested,
@@ -505,7 +523,6 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
         "acc1_cagr":      a1_cagr,
         "acc1_drawdown":  float((a1_ps / a1_ps.cummax() - 1).min()),
         "acc1_dd_series": a1_ps / a1_ps.cummax() - 1,
-        # acc2 策略＋DCA
         "acc2_series":    a2_ps,
         "acc2_final":     a2_final,
         "acc2_invested":  a2_invested,
@@ -513,15 +530,13 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
         "acc2_cagr":      a2_cagr,
         "acc2_drawdown":  float((a2_ps / a2_ps.cummax() - 1).min()),
         "acc2_dd_series": a2_ps / a2_ps.cummax() - 1,
-        "dca_invested":   a2_dca_total,
-        # 交易記錄
+        "dca_invested":   a2_dca_shares_invested,
         "buy_dates":      buy_dates,
         "sell_dates":     sell_dates,
         "buy_prices":     buy_prices,
         "sell_prices":    sell_prices,
         "dca_buy_dates":  dca_buy_dates,
         "dca_buy_prices": dca_buy_prices,
-        # 投入成本序列（累計）
         "acc1_inv_series": pd.Series(a1_inv_vals, index=df.index),
         "acc2_inv_series": pd.Series(a2_inv_vals, index=df.index),
     }
@@ -529,8 +544,9 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
 
 def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> dict:
     """
-    acc3: 初始資金 + DCA + 買入持有（永不賣）
-    acc4: 初始資金 + 買入持有（永不賣）
+    acc3: 初始全買 + 每月 2X 直接買股（B&H，永不賣）
+          對應 acc2 的總投入（DCA部分X + 信號池部分X = 2X）
+    acc4: 初始全買，永不動（純B&H基準）
     """
     c          = df["Close"].squeeze()
     initial    = float(inv_cfg["initial"])
@@ -538,52 +554,36 @@ def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> dict:
     dca_amount = float(inv_cfg.get("dca_amount", 0))
     dca_freq   = inv_cfg.get("dca_freq", 1)
 
-    trading_days = df.index
-    dca_dates    = set()
-    if mode == "dca" and dca_amount > 0:
-        if dca_freq == 1:
-            seen = set()
-            for d in trading_days:
-                ym = (d.year, d.month)
-                if ym not in seen: dca_dates.add(d); seen.add(ym)
-        elif dca_freq == 2:
-            fm, sm = {}, {}
-            for d in trading_days:
-                ym = (d.year, d.month)
-                if ym not in fm: fm[ym] = d
-                if ym not in sm and d.day >= 15: sm[ym] = d
-            dca_dates = set(fm.values()) | set(sm.values())
-        elif dca_freq == 4:
-            dca_dates = set(trading_days[::5])
+    dca_dates = _build_dca_dates(df.index, dca_amount, dca_freq, mode)
 
-    # acc4：純 B&H
+    # acc4：純 B&H（永遠持有初始股票）
     a4_shares   = initial / float(c.iloc[0])
     a4_invested = initial
 
-    # acc3：B&H + DCA
+    # acc3：B&H + 每月 2X（對應 acc2 的相同總資金）
     a3_shares   = initial / float(c.iloc[0])
     a3_invested = initial
 
-    a3_vals, a4_vals = [], []
+    a3_vals, a4_vals     = [], []
     a3_inv_vals, a4_inv_vals = [], []
 
     for i, idx in enumerate(df.index):
         price = float(c.iloc[i])
         if mode == "dca" and dca_amount > 0 and idx in dca_dates:
-            a3_shares   += dca_amount / price
-            a3_invested += dca_amount
+            a3_shares   += (dca_amount * 2) / price   # 2X：對應 acc2 的 DCA+信號池
+            a3_invested += dca_amount * 2
         a3_vals.append(a3_shares * price)
         a4_vals.append(a4_shares * price)
         a3_inv_vals.append(a3_invested)
         a4_inv_vals.append(a4_invested)
 
     return {
-        "acc3_series":    pd.Series(a3_vals, index=df.index),
-        "acc3_invested":  a3_invested,
-        "acc3_inv_series":pd.Series(a3_inv_vals, index=df.index),
-        "acc4_series":    pd.Series(a4_vals, index=df.index),
-        "acc4_invested":  a4_invested,
-        "acc4_inv_series":pd.Series(a4_inv_vals, index=df.index),
+        "acc3_series":     pd.Series(a3_vals,     index=df.index),
+        "acc3_invested":   a3_invested,
+        "acc3_inv_series": pd.Series(a3_inv_vals, index=df.index),
+        "acc4_series":     pd.Series(a4_vals,     index=df.index),
+        "acc4_invested":   a4_invested,
+        "acc4_inv_series": pd.Series(a4_inv_vals, index=df.index),
     }
 
 
