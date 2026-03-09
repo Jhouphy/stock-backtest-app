@@ -327,42 +327,150 @@ def check_vcp(df: pd.DataFrame) -> dict:
             "passed": all([c_a, c_b, c_c, c_d])}
 
 
-def run_backtest(df: pd.DataFrame, initial_capital: float) -> dict:
-    """全倉模式回測"""
-    c = df["Close"].squeeze()
-    capital, position, in_market = initial_capital, 0.0, False
-    portfolio_values = []
-    buy_dates, sell_dates, buy_prices, sell_prices = [], [], [], []
+def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
+    """
+    支援多種投入方式的回測引擎：
+    - inv_cfg["initial"]      : 初始資金
+    - inv_cfg["mode"]         : "lump_sum" | "dca"
+    - inv_cfg["dca_amount"]   : 每期定投金額（DCA 模式）
+    - inv_cfg["dca_day"]      : 每月幾日投入（DCA 模式）
+    - inv_cfg["buy_mode"]     : "all_in" | "fixed_amount" | "fixed_pct"
+    - inv_cfg["buy_amount"]   : 每次買入固定金額
+    - inv_cfg["buy_pct"]      : 每次買入比例 (0~1)
+    - inv_cfg["sell_mode"]    : "all_out" | "fixed_amount" | "fixed_pct"
+    - inv_cfg["sell_amount"]  : 每次賣出固定金額（市值）
+    - inv_cfg["sell_pct"]     : 每次賣出比例 (0~1)
+    """
+    c              = df["Close"].squeeze()
+    initial        = inv_cfg["initial"]
+    mode           = inv_cfg.get("mode", "lump_sum")
+    dca_amount     = inv_cfg.get("dca_amount", 0)
+    dca_day        = inv_cfg.get("dca_day", 1)
+    buy_mode       = inv_cfg.get("buy_mode", "all_in")
+    buy_amount     = inv_cfg.get("buy_amount", initial)
+    buy_pct        = inv_cfg.get("buy_pct", 1.0)
+    sell_mode      = inv_cfg.get("sell_mode", "all_out")
+    sell_amount    = inv_cfg.get("sell_amount", 0)
+    sell_pct       = inv_cfg.get("sell_pct", 1.0)
+
+    capital        = float(initial)
+    position       = 0.0
+    in_market      = False
+    total_invested = float(initial)       # 追蹤累計投入資金
+    dca_invested   = 0.0                  # 定投累計金額
+    portfolio_values   = []
+    invested_values    = []               # 每日累計投入曲線
+    buy_dates, sell_dates   = [], []
+    buy_prices, sell_prices = [], []
+    buy_amounts_list        = []
+
+    # 記錄已執行 DCA 的 (年, 月) 組合，避免同月重複投入
+    dca_done = set()
 
     for i, (idx, row) in enumerate(df.iterrows()):
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
-        if signal == 1 and not in_market:
-            position, capital, in_market = capital / price, 0.0, True
-            buy_dates.append(idx); buy_prices.append(price)
+
+        # ── 定投：每月指定日注入資金 ──
+        if mode == "dca" and dca_amount > 0:
+            ym = (idx.year, idx.month)
+            if ym not in dca_done and idx.day >= dca_day:
+                capital        += dca_amount
+                total_invested += dca_amount
+                dca_invested   += dca_amount
+                dca_done.add(ym)
+
+        # ── 買入邏輯 ──
+        if signal == 1:
+            if buy_mode == "all_in":
+                use_cash = capital
+            elif buy_mode == "fixed_amount":
+                use_cash = min(buy_amount, capital)
+            else:  # fixed_pct
+                use_cash = capital * buy_pct
+
+            if use_cash > 1.0 and not in_market:
+                shares    = use_cash / price
+                position += shares
+                capital  -= use_cash
+                in_market = True
+                buy_dates.append(idx)
+                buy_prices.append(price)
+                buy_amounts_list.append(use_cash)
+
+        # ── 賣出邏輯 ──
         elif signal == -1 and in_market:
-            capital, position, in_market = position * price, 0.0, False
-            sell_dates.append(idx); sell_prices.append(price)
+            if sell_mode == "all_out":
+                sell_shares = position
+            elif sell_mode == "fixed_amount":
+                sell_shares = min(sell_amount / price, position)
+            else:  # fixed_pct
+                sell_shares = position * sell_pct
+
+            proceeds  = sell_shares * price
+            position -= sell_shares
+            capital  += proceeds
+            if position < 1e-6:
+                in_market = False
+            sell_dates.append(idx)
+            sell_prices.append(price)
+
         portfolio_values.append(capital + position * price)
+        invested_values.append(total_invested)
 
-    final_value = capital + position * float(c.iloc[-1])
-    ps = pd.Series(portfolio_values, index=df.index)
-    years = (df.index[-1] - df.index[0]).days / 365.25
-    total_return = (final_value - initial_capital) / initial_capital
-    cagr = (1 + total_return) ** (1 / max(years, 0.01)) - 1
-    drawdown = (ps - ps.cummax()) / ps.cummax()
+    final_value   = capital + position * float(c.iloc[-1])
+    ps            = pd.Series(portfolio_values, index=df.index)
+    inv_series    = pd.Series(invested_values,  index=df.index)
+    years         = (df.index[-1] - df.index[0]).days / 365.25
+    total_return  = (final_value - total_invested) / total_invested
+    cagr          = (final_value / total_invested) ** (1 / max(years, 0.01)) - 1
+    drawdown      = (ps - ps.cummax()) / ps.cummax()
 
-    return {"portfolio_series": ps, "final_value": final_value,
-            "total_return": total_return, "cagr": cagr,
-            "max_drawdown": float(drawdown.min()), "drawdown_series": drawdown,
-            "buy_dates": buy_dates, "sell_dates": sell_dates,
-            "buy_prices": buy_prices, "sell_prices": sell_prices}
+    return {
+        "portfolio_series": ps,
+        "invested_series":  inv_series,
+        "final_value":      final_value,
+        "total_invested":   total_invested,
+        "dca_invested":     dca_invested,
+        "total_return":     total_return,
+        "cagr":             cagr,
+        "max_drawdown":     float(drawdown.min()),
+        "drawdown_series":  drawdown,
+        "buy_dates":        buy_dates,
+        "sell_dates":       sell_dates,
+        "buy_prices":       buy_prices,
+        "sell_prices":      sell_prices,
+    }
 
 
-def compute_benchmark(df: pd.DataFrame, initial_capital: float) -> pd.Series:
-    """買入持有基準線"""
-    c = df["Close"].squeeze()
-    return c * (initial_capital / float(c.iloc[0]))
+def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> tuple:
+    """
+    計算買入持有基準線（支援 DCA）。
+    回傳 (portfolio_series, total_invested)
+    """
+    c          = df["Close"].squeeze()
+    initial    = inv_cfg["initial"]
+    mode       = inv_cfg.get("mode", "lump_sum")
+    dca_amount = inv_cfg.get("dca_amount", 0)
+    dca_day    = inv_cfg.get("dca_day", 1)
+
+    # 初始全倉買入
+    total_invested = float(initial)
+    shares         = float(initial) / float(c.iloc[0])
+    dca_done       = set()
+    values         = []
+
+    for i, idx in enumerate(df.index):
+        price = float(c.iloc[i])
+        if mode == "dca" and dca_amount > 0:
+            ym = (idx.year, idx.month)
+            if ym not in dca_done and idx.day >= dca_day:
+                shares         += dca_amount / price
+                total_invested += dca_amount
+                dca_done.add(ym)
+        values.append(shares * price)
+
+    return pd.Series(values, index=df.index), total_invested
 
 
 # ═══════════════════════════════════════════════════════
@@ -372,23 +480,33 @@ CHART = dict(paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
              font=dict(color="#475569", family="IBM Plex Mono, monospace", size=11),
              gridcolor="#e2e8f0")
 
-def plot_equity(portfolio, benchmark, strategy_name, initial_capital):
+def plot_equity(portfolio, benchmark, strategy_name, total_invested, invested_series=None):
     fig = go.Figure()
+    # 累計投入成本線（DCA 模式為爬升線，一次性為水平線）
+    if invested_series is not None:
+        fig.add_trace(go.Scatter(x=invested_series.index, y=invested_series.values,
+            name="累計投入成本", line=dict(color="#f59e0b", width=1.5, dash="longdash"),
+            opacity=0.8))
+    else:
+        fig.add_hline(y=total_invested, line_dash="dash", line_color="#f59e0b",
+                      line_width=1.2, annotation_text="投入成本",
+                      annotation_font_color="#f59e0b")
+    # 買入持有基準
     fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
         name="買入持有 (B&H)", line=dict(color="#94a3b8", width=1.5, dash="dot")))
+    # 策略資金曲線
     fig.add_trace(go.Scatter(x=portfolio.index, y=portfolio.values,
         name=strategy_name, line=dict(color="#0369a1", width=2.5),
         fill="tozeroy", fillcolor="rgba(3,105,161,0.07)"))
-    fig.add_hline(y=initial_capital, line_dash="dash", line_color="#cbd5e1",
-                  line_width=1, annotation_text="初始資金", annotation_font_color="#94a3b8")
-    fig.update_layout(title=dict(text="📊 資產增長曲線對比", font=dict(size=14, color="#0f172a")),
+    fig.update_layout(title=dict(text="📊 資產增長曲線對比（藍=策略 / 灰虛=B&H / 橘虛=累計投入）",
+                                 font=dict(size=13, color="#0f172a")),
         xaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"]),
         yaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"], tickprefix="$", tickformat=",.0f"),
         paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"],
-        font=CHART["font"], hovermode="x unified", height=400,
+        font=CHART["font"], hovermode="x unified", height=420,
         legend=dict(bgcolor="rgba(255,255,255,0.8)", bordercolor="#e2e8f0", borderwidth=1,
                     orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10,r=10,t=50,b=10))
+        margin=dict(l=10,r=10,t=55,b=10))
     return fig
 
 
@@ -486,13 +604,90 @@ def main():
             start_dt = end_dt.replace(year=end_dt.year - years_back, day=28)
         start_date = start_dt.strftime("%Y-%m-%d")
         end_str    = end_date.strftime("%Y-%m-%d")
-        initial_capital = st.number_input("初始投資金額 (USD)", min_value=1000,
+        # ── 初始資金 ──
+        initial_capital = st.number_input("初始資金 (USD)", min_value=0,
             max_value=10_000_000, value=100_000, step=10_000, format="%d")
+
+        # ── 投入方式 ──
+        st.markdown("### 💰 投入方式")
+        inv_mode = st.radio("選擇投入模式", ["一次性投入", "定期定額 (DCA)"],
+            horizontal=True,
+            help="一次性：回測起始日全額買入。定期定額：每月固定日注入資金，模擬長期積累。")
+
+        dca_amount, dca_day = 0, 1
+        if inv_mode == "定期定額 (DCA)":
+            dc1, dc2 = st.columns(2)
+            dca_amount = dc1.number_input("每期投入 ($)", min_value=100,
+                max_value=1_000_000, value=3_000, step=500, format="%d")
+            dca_day = dc2.number_input("每月投入日", min_value=1,
+                max_value=28, value=1, step=1, format="%d",
+                help="選擇每月幾號執行定投（1~28，避免月底問題）")
+            # 估算總投入
+            years_est = years_back
+            total_est = initial_capital + dca_amount * 12 * years_est
+            st.info(f"💡 預估總投入：${total_est:,.0f}　（初始 ${initial_capital:,} + 定投 ${dca_amount:,}/月 × {years_est}年）")
+
+        # ── 每次買入倉位 ──
+        st.markdown("### 🎚️ 倉位控制")
+        buy_mode_label = st.selectbox("買入方式",
+            ["全倉買入", "固定金額", "固定比例 %"],
+            help="每次觸發買入信號時，要用多少資金進場。")
+        buy_amount, buy_pct = initial_capital, 1.0
+        if buy_mode_label == "固定金額":
+            buy_amount = st.number_input("每次買入金額 ($)", min_value=100,
+                max_value=10_000_000, value=min(10_000, initial_capital), step=1_000, format="%d")
+        elif buy_mode_label == "固定比例 %":
+            buy_pct = st.slider("買入比例", 5, 100, 100, step=5,
+                format="%d%%", help="佔當前可用資金的百分比") / 100
+
+        sell_mode_label = st.selectbox("賣出方式",
+            ["全倉賣出", "固定金額", "固定比例 %"],
+            help="每次觸發賣出信號時，要賣出多少持倉。")
+        sell_amount, sell_pct = 0, 1.0
+        if sell_mode_label == "固定金額":
+            sell_amount = st.number_input("每次賣出金額 ($)", min_value=100,
+                max_value=10_000_000, value=10_000, step=1_000, format="%d")
+        elif sell_mode_label == "固定比例 %":
+            sell_pct = st.slider("賣出比例", 5, 100, 100, step=5,
+                format="%d%%") / 100
+
+        # 彙整投資設定
+        inv_cfg = {
+            "initial":     initial_capital,
+            "mode":        "dca" if inv_mode == "定期定額 (DCA)" else "lump_sum",
+            "dca_amount":  dca_amount,
+            "dca_day":     dca_day,
+            "buy_mode":    {"全倉買入": "all_in", "固定金額": "fixed_amount", "固定比例 %": "fixed_pct"}[buy_mode_label],
+            "buy_amount":  buy_amount,
+            "buy_pct":     buy_pct,
+            "sell_mode":   {"全倉賣出": "all_out", "固定金額": "fixed_amount", "固定比例 %": "fixed_pct"}[sell_mode_label],
+            "sell_amount": sell_amount,
+            "sell_pct":    sell_pct,
+        }
 
         st.markdown("---")
         st.markdown("### 📐 策略選擇")
+
+        STRATEGY_HELP = {
+            "MA 交叉策略":
+                "移動平均線交叉策略：當短期均線（快線）向上穿越長期均線（慢線）時買入（黃金交叉），"
+                "反之向下穿越時賣出（死亡交叉）。適合趨勢明顯的市場，震盪盤容易產生假信號。",
+            "RSI 動能策略":
+                "相對強弱指標：RSI 低於超賣門檻（預設 30）時買入，高於超買門檻（預設 70）時賣出。"
+                "衡量價格動能強弱，適合震盪行情，強趨勢中可能過早賣出。",
+            "布林通道策略":
+                "布林帶均值回歸：股價觸碰下軌（均值 - 2σ）時視為超跌買入，觸碰上軌時視為超漲賣出。"
+                "以統計標準差衡量波動率，適合區間震盪股，突破行情時效果較差。",
+            "MACD 趨勢策略":
+                "MACD 指標：由快慢 EMA 差值構成，當 MACD 線上穿信號線時買入，下穿時賣出。"
+                "兼顧趨勢方向與動能變化，是最常用的趨勢追蹤指標之一。",
+        }
         strategy = st.selectbox("選擇回測策略",
-            ["MA 交叉策略", "RSI 動能策略", "布林通道策略", "MACD 趨勢策略"])
+            list(STRATEGY_HELP.keys()),
+            help=STRATEGY_HELP.get("MA 交叉策略"))  # 預設說明
+        # 在策略說明框中顯示當前策略詳細說明
+        with st.expander("📖 策略說明", expanded=False):
+            st.caption(STRATEGY_HELP[strategy])
 
         params = {}
         with st.expander("⚙️ 策略參數設定", expanded=True):
@@ -558,12 +753,12 @@ def main():
             df["Signal"] = 0
         st.markdown("---")
 
-    result    = run_backtest(df, initial_capital)
-    benchmark = compute_benchmark(df, initial_capital)
-    bh_return = (float(benchmark.iloc[-1]) - initial_capital) / initial_capital
-    years     = (df.index[-1] - df.index[0]).days / 365.25
-    bh_cagr   = (1 + bh_return) ** (1 / max(years, 0.01)) - 1
-    bh_dd     = float((benchmark / benchmark.cummax() - 1).min())
+    result              = run_backtest(df, inv_cfg)
+    benchmark, bh_total = compute_benchmark(df, inv_cfg)
+    years               = (df.index[-1] - df.index[0]).days / 365.25
+    bh_return           = (float(benchmark.iloc[-1]) - bh_total) / bh_total
+    bh_cagr             = (float(benchmark.iloc[-1]) / bh_total) ** (1 / max(years, 0.01)) - 1
+    bh_dd               = float((benchmark / benchmark.cummax() - 1).min())
 
     c = df["Close"].squeeze()
     i1, i2, i3, i4, i5 = st.columns(5)
@@ -574,10 +769,23 @@ def main():
     i5.metric("數據截止", df.index[-1].strftime("%Y-%m-%d"))
     st.markdown("---")
 
-    st.markdown(f'<div class="strategy-badge">STRATEGY: {strategy.upper()}</div>', unsafe_allow_html=True)
+    # 投入摘要列
+    inv_mode_label = "定期定額 (DCA)" if inv_cfg["mode"] == "dca" else "一次性投入"
+    st.markdown(f'<div class="strategy-badge">STRATEGY: {strategy.upper()} ・ {inv_mode_label}</div>',
+                unsafe_allow_html=True)
+
+    # 投入金額摘要
+    ci1, ci2, ci3 = st.columns(3)
+    ci1.metric("初始投入", f"${inv_cfg['initial']:,.0f}")
+    ci2.metric("定投累計" if inv_cfg["mode"] == "dca" else "一次性投入",
+               f"${result['dca_invested']:,.0f}" if inv_cfg["mode"] == "dca" else f"${inv_cfg['initial']:,.0f}")
+    ci3.metric("總投入資金", f"${result['total_invested']:,.0f}",
+               delta=f"B&H 總投入 ${bh_total:,.0f}")
+    st.markdown("---")
+
     st.markdown("#### 📊 績效指標對比")
     m1, m2, m3, m4, m5, m6 = st.columns(6)
-    m1.metric("策略總報酬", f"{result['total_return']:+.2%}", delta=f"vs B&H {bh_return:+.2%}")
+    m1.metric("策略總報酬 (on投入)", f"{result['total_return']:+.2%}", delta=f"vs B&H {bh_return:+.2%}")
     m2.metric("策略 CAGR",  f"{result['cagr']:+.2%}",         delta=f"vs B&H {bh_cagr:+.2%}")
     m3.metric("策略最大回撤", f"{result['max_drawdown']:.2%}", delta=f"vs B&H {bh_dd:.2%}", delta_color="inverse")
     m4.metric("最終資產價值", f"${result['final_value']:,.0f}")
@@ -588,8 +796,9 @@ def main():
     tab1, tab2, tab3 = st.tabs(["📈 資產增長曲線", "🕯️ K線圖與買賣標記", "📉 回撤分析"])
 
     with tab1:
-        st.plotly_chart(plot_equity(result["portfolio_series"], benchmark, strategy, initial_capital),
-                        use_container_width=True)
+        fig_eq = plot_equity(result["portfolio_series"], benchmark, strategy,
+                             result["total_invested"], result.get("invested_series"))
+        st.plotly_chart(fig_eq, use_container_width=True)
     with tab2:
         st.plotly_chart(plot_candlestick(df, strategy, params,
             result["buy_dates"], result["sell_dates"],
