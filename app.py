@@ -275,6 +275,16 @@ def compute_indicators(df: pd.DataFrame, strategy: str, params: dict) -> pd.Data
         df["MACD"], df["MACD_Signal"], df["MACD_Hist"] = calc_macd(
             c, params["macd_fast"], params["macd_slow"], params["macd_signal"])
 
+    elif strategy == "MA均線偏離策略":
+        # 計算買入均線、賣出均線，及與收盤價的偏離百分比
+        bp = params["dev_buy_period"]
+        sp = params["dev_sell_period"]
+        df[f"BuyMA{bp}"]  = sma(c, bp)
+        df[f"SellMA{sp}"] = sma(c, sp)
+        # 偏離率：(收盤 - MA) / MA * 100
+        df["Dev_Buy"]  = (c - df[f"BuyMA{bp}"])  / df[f"BuyMA{bp}"]  * 100
+        df["Dev_Sell"] = (c - df[f"SellMA{sp}"]) / df[f"SellMA{sp}"] * 100
+
     # VCP 用指標
     df["MA150"] = sma(c, 150)
     df["MA200"] = sma(c, 200)
@@ -308,6 +318,15 @@ def generate_signals(df: pd.DataFrame, strategy: str, params: dict) -> pd.DataFr
         df["Signal"] = np.where(
             (df["MACD"] > df["MACD_Signal"]) & (df["MACD"].shift(1) <= df["MACD_Signal"].shift(1)), 1,
             np.where((df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1)), -1, 0))
+
+    elif strategy == "MA均線偏離策略":
+        buy_th  = params["dev_buy_pct"]    # 低於均線 N%（負值或0）才買
+        sell_th = params["dev_sell_pct"]   # 高於均線 N%（正值）才賣
+        # 買入：偏離率 <= buy_th（例如 -5% 表示跌破均線 5% 才買；0% 表示跌破均線即買）
+        # 賣出：偏離率 >= sell_th（例如 +20% 表示漲超均線 20% 才賣）
+        df["Signal"] = np.where(
+            (df["Dev_Buy"] <= buy_th) & (df["Dev_Buy"].shift(1) > buy_th), 1,
+            np.where((df["Dev_Sell"] >= sell_th) & (df["Dev_Sell"].shift(1) < sell_th), -1, 0))
 
     return df
 
@@ -478,8 +497,10 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
 
 def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> tuple:
     """
-    計算買入持有基準線（支援 DCA）。
-    回傳 (portfolio_series, total_invested)
+    計算兩條買入持有基準線：
+    - bh_lump  : 只用初始資金、從不加碼（純 B&H）
+    - bh_dca   : 初始資金 + 每期 DCA 同步買入持有
+    回傳 (bh_lump_series, bh_dca_series, lump_total, dca_total)
     """
     c          = df["Close"].squeeze()
     initial    = inv_cfg["initial"]
@@ -487,7 +508,7 @@ def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> tuple:
     dca_amount = inv_cfg.get("dca_amount", 0)
     dca_freq   = inv_cfg.get("dca_freq", 1)
 
-    # 預先計算 DCA 注入日期（與 run_backtest 邏輯一致）
+    # ── 預先計算 DCA 注入日期 ──
     trading_days = df.index
     dca_dates = set()
     if mode == "dca" and dca_amount > 0:
@@ -496,33 +517,36 @@ def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> tuple:
             for d in trading_days:
                 ym = (d.year, d.month)
                 if ym not in seen_months:
-                    dca_dates.add(d)
-                    seen_months.add(ym)
+                    dca_dates.add(d); seen_months.add(ym)
         elif dca_freq == 2:
             first_of_month, second_of_month = {}, {}
             for d in trading_days:
                 ym = (d.year, d.month)
-                if ym not in first_of_month:
-                    first_of_month[ym] = d
-                if ym not in second_of_month and d.day >= 15:
-                    second_of_month[ym] = d
+                if ym not in first_of_month: first_of_month[ym] = d
+                if ym not in second_of_month and d.day >= 15: second_of_month[ym] = d
             dca_dates = set(first_of_month.values()) | set(second_of_month.values())
         elif dca_freq == 4:
             dca_dates = set(trading_days[::5])
 
-    # 初始全倉買入
-    total_invested = float(initial)
-    shares         = float(initial) / float(c.iloc[0])
-    values         = []
+    # ── 計算兩條線 ──
+    lump_shares    = float(initial) / float(c.iloc[0])
+    lump_total     = float(initial)
+    dca_shares     = float(initial) / float(c.iloc[0])   # 同樣先買初始倉
+    dca_total      = float(initial)
+    lump_values, dca_values = [], []
 
     for i, idx in enumerate(df.index):
         price = float(c.iloc[i])
+        # DCA 線：每期加碼買入
         if mode == "dca" and dca_amount > 0 and idx in dca_dates:
-            shares         += dca_amount / price
-            total_invested += dca_amount
-        values.append(shares * price)
+            dca_shares += dca_amount / price
+            dca_total  += dca_amount
+        lump_values.append(lump_shares * price)
+        dca_values.append(dca_shares * price)
 
-    return pd.Series(values, index=df.index), total_invested
+    bh_lump = pd.Series(lump_values, index=df.index)
+    bh_dca  = pd.Series(dca_values,  index=df.index)
+    return bh_lump, bh_dca, lump_total, dca_total
 
 
 # ═══════════════════════════════════════════════════════
@@ -532,38 +556,54 @@ CHART = dict(paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
              font=dict(color="#475569", family="IBM Plex Mono, monospace", size=11),
              gridcolor="#e2e8f0")
 
-def plot_equity(portfolio, benchmark, strategy_name, total_invested, invested_series=None):
+def plot_equity(portfolio, bh_lump, bh_dca, strategy_name,
+                total_invested, lump_total, is_dca=False, invested_series=None):
     fig = go.Figure()
-    # 累計投入成本線（DCA 模式為爬升線，一次性為水平線）
-    if invested_series is not None:
+
+    # ── 1. 累計投入成本線（橘） ──
+    if is_dca and invested_series is not None:
         fig.add_trace(go.Scatter(x=invested_series.index, y=invested_series.values,
-            name="累計投入成本", line=dict(color="#f59e0b", width=1.5, dash="longdash"),
-            opacity=0.8))
+            name="累計投入成本", line=dict(color="#f59e0b", width=1.3, dash="longdash"),
+            opacity=0.75))
     else:
-        fig.add_hline(y=total_invested, line_dash="dash", line_color="#f59e0b",
-                      line_width=1.2, annotation_text="投入成本",
+        fig.add_hline(y=lump_total, line_dash="dash", line_color="#f59e0b",
+                      line_width=1.2, annotation_text="初始投入",
                       annotation_font_color="#f59e0b")
-    # 買入持有基準
-    fig.add_trace(go.Scatter(x=benchmark.index, y=benchmark.values,
-        name="買入持有 (B&H)", line=dict(color="#94a3b8", width=1.5, dash="dot")))
-    # 策略資金曲線
+
+    # ── 2. B&H 純初始資金線（淺灰虛線） ──
+    fig.add_trace(go.Scatter(x=bh_lump.index, y=bh_lump.values,
+        name=f"B&H 初始資金 (${lump_total:,.0f})",
+        line=dict(color="#94a3b8", width=1.5, dash="dot")))
+
+    # ── 3. B&H 含 DCA 線（綠虛線，僅 DCA 模式顯示）──
+    if is_dca:
+        fig.add_trace(go.Scatter(x=bh_dca.index, y=bh_dca.values,
+            name="B&H 含DCA持續買入",
+            line=dict(color="#16a34a", width=1.5, dash="dash")))
+
+    # ── 4. 策略資金曲線（藍實線）──
     fig.add_trace(go.Scatter(x=portfolio.index, y=portfolio.values,
         name=strategy_name, line=dict(color="#0369a1", width=2.5),
-        fill="tozeroy", fillcolor="rgba(3,105,161,0.07)"))
-    fig.update_layout(title=dict(text="📊 資產增長曲線對比（藍=策略 / 灰虛=B&H / 橘虛=累計投入）",
-                                 font=dict(size=13, color="#0f172a")),
+        fill="tozeroy", fillcolor="rgba(3,105,161,0.06)"))
+
+    title_txt = ("📊 資產增長曲線（藍=策略 / 灰虛=B&H初始 / 綠虛=B&H含DCA / 橘虛=累計成本）"
+                 if is_dca else
+                 "📊 資產增長曲線（藍=策略 / 灰虛=買入持有 / 橘虛=初始投入）")
+    fig.update_layout(
+        title=dict(text=title_txt, font=dict(size=12, color="#0f172a")),
         xaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"]),
-        yaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"], tickprefix="$", tickformat=",.0f"),
+        yaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"],
+                   tickprefix="$", tickformat=",.0f"),
         paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"],
-        font=CHART["font"], hovermode="x unified", height=420,
-        legend=dict(bgcolor="rgba(255,255,255,0.8)", bordercolor="#e2e8f0", borderwidth=1,
+        font=CHART["font"], hovermode="x unified", height=430,
+        legend=dict(bgcolor="rgba(255,255,255,0.85)", bordercolor="#e2e8f0", borderwidth=1,
                     orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=10,r=10,t=55,b=10))
+        margin=dict(l=10,r=10,t=60,b=10))
     return fig
 
 
 def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, sell_prices):
-    need_sub = strategy in ["RSI 動能策略", "MACD 趨勢策略"]
+    need_sub = strategy in ["RSI 動能策略", "MACD 趨勢策略", "MA均線偏離策略"]
     rows = 3 if need_sub else 2
     row_heights = [0.55, 0.2, 0.25] if need_sub else [0.65, 0.35]
 
@@ -582,6 +622,14 @@ def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, se
             name=f"MA{params['ma_fast']}", line=dict(color="#0369a1", width=1.5)), row=1, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df[f"MA{params['ma_slow']}"],
             name=f"MA{params['ma_slow']}", line=dict(color="#7c3aed", width=1.5)), row=1, col=1)
+    elif strategy == "MA均線偏離策略":
+        bp = params["dev_buy_period"]
+        sp = params["dev_sell_period"]
+        fig.add_trace(go.Scatter(x=df.index, y=df[f"BuyMA{bp}"],
+            name=f"買入均線 MA{bp}", line=dict(color="#0369a1", width=1.5)), row=1, col=1)
+        if sp != bp:
+            fig.add_trace(go.Scatter(x=df.index, y=df[f"SellMA{sp}"],
+                name=f"賣出均線 MA{sp}", line=dict(color="#dc2626", width=1.5, dash="dot")), row=1, col=1)
     elif strategy == "布林通道策略":
         fig.add_trace(go.Scatter(x=df.index, y=df["BB_Upper"], name="BB上軌",
             line=dict(color="#6366f1", width=1, dash="dot")), row=1, col=1)
@@ -621,6 +669,25 @@ def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, se
             line=dict(color="#0369a1", width=1.5)), row=3, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal",
             line=dict(color="#f59e0b", width=1.2)), row=3, col=1)
+    elif strategy == "MA均線偏離策略" and need_sub:
+        # 買入偏離率（藍）與賣出偏離率（紅）
+        fig.add_trace(go.Scatter(x=df.index, y=df["Dev_Buy"],
+            name=f"買入偏離率(MA{params['dev_buy_period']})",
+            line=dict(color="#0369a1", width=1.3)), row=3, col=1)
+        if params["dev_sell_period"] != params["dev_buy_period"]:
+            fig.add_trace(go.Scatter(x=df.index, y=df["Dev_Sell"],
+                name=f"賣出偏離率(MA{params['dev_sell_period']})",
+                line=dict(color="#dc2626", width=1.3, dash="dot")), row=3, col=1)
+        # 買入/賣出門檻水平線
+        fig.add_hline(y=params["dev_buy_pct"], line_dash="dash",
+                      line_color="#0369a1", row=3, col=1,
+                      annotation_text=f"買入 {params['dev_buy_pct']:+.0f}%",
+                      annotation_font_color="#0369a1")
+        fig.add_hline(y=params["dev_sell_pct"], line_dash="dash",
+                      line_color="#dc2626", row=3, col=1,
+                      annotation_text=f"賣出 +{params['dev_sell_pct']:.0f}%",
+                      annotation_font_color="#dc2626")
+        fig.add_hline(y=0, line_color="#94a3b8", line_width=0.8, row=3, col=1)
 
     fig.update_layout(paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"],
         font=CHART["font"], xaxis_rangeslider_visible=False,
@@ -732,11 +799,15 @@ def main():
             "MACD 趨勢策略":
                 "MACD 指標：由快慢 EMA 差值構成，當 MACD 線上穿信號線時買入，下穿時賣出。"
                 "兼顧趨勢方向與動能變化，是最常用的趨勢追蹤指標之一。",
+            "MA均線偏離策略":
+                "均線偏離回歸策略：當收盤價低於買入均線達設定百分比時買入，"
+                "高於賣出均線達設定百分比時賣出。"
+                "例如：低於60日均線 0% 買入（即跌破均線即買），高於5日均線 20% 時賣出。"
+                "買入/賣出可使用不同週期的均線，靈活度高。",
         }
         strategy = st.selectbox("選擇回測策略",
             list(STRATEGY_HELP.keys()),
-            help=STRATEGY_HELP.get("MA 交叉策略"))  # 預設說明
-        # 在策略說明框中顯示當前策略詳細說明
+            help=STRATEGY_HELP.get("MA 交叉策略"))
         with st.expander("📖 策略說明", expanded=False):
             st.caption(STRATEGY_HELP[strategy])
 
@@ -756,6 +827,30 @@ def main():
                 params["macd_fast"]   = st.slider("MACD 快線", 5, 20, 12)
                 params["macd_slow"]   = st.slider("MACD 慢線", 15, 50, 26)
                 params["macd_signal"] = st.slider("MACD 信號線", 5, 20, 9)
+            elif strategy == "MA均線偏離策略":
+                st.markdown("**📉 買入條件**")
+                bc1, bc2 = st.columns(2)
+                params["dev_buy_period"] = bc1.number_input(
+                    "買入均線週期", min_value=5, max_value=500, value=60, step=5,
+                    help="計算買入基準的移動平均線週期，例如 60 表示 60 日均線")
+                params["dev_buy_pct"] = bc2.number_input(
+                    "低於均線 % 買入", min_value=-50.0, max_value=0.0, value=0.0, step=1.0,
+                    help="收盤價低於均線此百分比時觸發買入。0% = 跌破均線即買；-5% = 跌破均線再多跌 5% 才買")
+                st.markdown("**📈 賣出條件**")
+                sc1, sc2 = st.columns(2)
+                params["dev_sell_period"] = sc1.number_input(
+                    "賣出均線週期", min_value=5, max_value=500, value=5, step=5,
+                    help="計算賣出基準的移動平均線週期，例如 5 表示 5 日均線")
+                params["dev_sell_pct"] = sc2.number_input(
+                    "高於均線 % 賣出", min_value=0.0, max_value=100.0, value=20.0, step=1.0,
+                    help="收盤價高於均線此百分比時觸發賣出。20% = 漲超均線 20% 才賣")
+                # 即時預覽說明
+                st.caption(
+                    f"目前設定：收盤 ≤ {params['dev_buy_period']}日均線"
+                    f"{params['dev_buy_pct']:+.0f}% 買入 ／ "
+                    f"收盤 ≥ {params['dev_sell_period']}日均線"
+                    f"+{params['dev_sell_pct']:.0f}% 賣出"
+                )
 
         st.markdown("---")
         st.markdown("### 🔬 VCP 篩選器")
@@ -804,12 +899,16 @@ def main():
             df["Signal"] = 0
         st.markdown("---")
 
-    result              = run_backtest(df, inv_cfg)
-    benchmark, bh_total = compute_benchmark(df, inv_cfg)
-    years               = (df.index[-1] - df.index[0]).days / 365.25
-    bh_return           = (float(benchmark.iloc[-1]) - bh_total) / bh_total
-    bh_cagr             = (float(benchmark.iloc[-1]) / bh_total) ** (1 / max(years, 0.01)) - 1
-    bh_dd               = float((benchmark / benchmark.cummax() - 1).min())
+    result                         = run_backtest(df, inv_cfg)
+    bh_lump, bh_dca, lump_total, dca_total = compute_benchmark(df, inv_cfg)
+    is_dca  = inv_cfg["mode"] == "dca"
+    # 績效比較基準：DCA 模式用含 DCA 的 B&H，一次性用純 B&H
+    benchmark = bh_dca if is_dca else bh_lump
+    bh_total  = dca_total if is_dca else lump_total
+    years     = (df.index[-1] - df.index[0]).days / 365.25
+    bh_return = (float(benchmark.iloc[-1]) - bh_total) / bh_total
+    bh_cagr   = (float(benchmark.iloc[-1]) / bh_total) ** (1 / max(years, 0.01)) - 1
+    bh_dd     = float((benchmark / benchmark.cummax() - 1).min())
 
     c = df["Close"].squeeze()
     i1, i2, i3, i4, i5 = st.columns(5)
@@ -847,8 +946,12 @@ def main():
     tab1, tab2, tab3 = st.tabs(["📈 資產增長曲線", "🕯️ K線圖與買賣標記", "📉 回撤分析"])
 
     with tab1:
-        fig_eq = plot_equity(result["portfolio_series"], benchmark, strategy,
-                             result["total_invested"], result.get("invested_series"))
+        fig_eq = plot_equity(
+            result["portfolio_series"], bh_lump, bh_dca, strategy,
+            result["total_invested"], lump_total,
+            is_dca=is_dca,
+            invested_series=result.get("invested_series"),
+        )
         st.plotly_chart(fig_eq, use_container_width=True)
     with tab2:
         st.plotly_chart(plot_candlestick(df, strategy, params,
