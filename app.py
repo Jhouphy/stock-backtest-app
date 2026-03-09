@@ -1,9 +1,9 @@
 """
 個人化股票回測與選股分析 Web App
-作者: Claude (Anthropic)""""""
+作者: Claude(Anthropic)""""""
 個人化股票回測與選股分析 Web App
 技術棧: Streamlit + yfinance + Plotly
-指標: 純 pandas/numpy 實作（無第三方 TA 套件依賴）
+指標: 純 pandas/numpy 實作(無第三方 TA 套件依賴)
 """
 
 import streamlit as st
