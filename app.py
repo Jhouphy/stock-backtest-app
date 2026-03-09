@@ -377,11 +377,13 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     in_market      = False
     total_invested = float(initial)
     dca_invested   = 0.0
-    portfolio_values   = []
-    invested_values    = []
-    buy_dates, sell_dates   = [], []
+    portfolio_values    = []
+    invested_values     = []
+    buy_dates,  sell_dates  = [], []   # 策略信號買賣
     buy_prices, sell_prices = [], []
-    buy_amounts_list        = []
+    dca_buy_dates  = []                # DCA 定投（獨立追蹤）
+    dca_buy_prices = []
+    buy_amounts_list = []
 
     # ── 預先計算 DCA 注入日期（基於真實交易日曆，確保每期都觸發）──
     trading_days = df.index
@@ -416,49 +418,38 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
 
-        # ══ DCA 模式：定投日直接買入股票（這才是定期定額的本質）══
-        # 邏輯：不管信號，每到投入日就用 dca_amount 直接買股
-        # 策略信號只額外控制「加碼買入」與「賣出」
+        # ══ DCA：定投日直接買股，獨立追蹤，不混入策略信號清單 ══
         if mode == "dca" and dca_amount > 0 and idx in dca_dates:
             total_invested += dca_amount
             dca_invested   += dca_amount
-            # 直接以當日收盤價買入股票，不放進 capital
-            dca_shares      = dca_amount / price
-            position       += dca_shares
-            in_market       = True   # 有持倉即視為在市場中
-            buy_dates.append(idx)
-            buy_prices.append(price)
-            buy_amounts_list.append(dca_amount)
+            position       += dca_amount / price
+            in_market       = True
+            dca_buy_dates.append(idx)
+            dca_buy_prices.append(price)
 
-        # ══ 策略買入：用剩餘現金加碼（僅 lump_sum 模式或 DCA 有剩餘現金時）══
+        # ══ 策略買入信號：用可用現金依倉位設定買入 ══
         if signal == 1 and capital > 1.0:
             if buy_mode == "all_in":
                 use_cash = capital
             elif buy_mode == "fixed_amount":
                 use_cash = min(buy_amount, capital)
-            else:  # fixed_pct
+            else:
                 use_cash = capital * buy_pct
-
             if use_cash > 1.0:
-                shares    = use_cash / price
-                position += shares
-                capital  -= use_cash
-                in_market = True
-                # DCA 模式下策略買入不重複記錄（避免圖表符號爆炸）
-                if mode == "lump_sum":
-                    buy_dates.append(idx)
-                    buy_prices.append(price)
-                    buy_amounts_list.append(use_cash)
+                position  += use_cash / price
+                capital   -= use_cash
+                in_market  = True
+                buy_dates.append(idx)
+                buy_prices.append(price)
 
-        # ══ 策略賣出：賣出持倉，賣出所得放回 capital（等待下次 DCA 或信號再買）══
+        # ══ 策略賣出信號：賣出持倉，所得放回 capital ══
         elif signal == -1 and in_market and position > 1e-6:
             if sell_mode == "all_out":
                 sell_shares = position
             elif sell_mode == "fixed_amount":
                 sell_shares = min(sell_amount / price, position)
-            else:  # fixed_pct
+            else:
                 sell_shares = position * sell_pct
-
             proceeds  = sell_shares * price
             position -= sell_shares
             capital  += proceeds
@@ -466,6 +457,13 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
                 in_market = False
             sell_dates.append(idx)
             sell_prices.append(price)
+
+        # ══ 賣出後若有閒置現金 & 無重新買入信號：DCA 模式自動再投入 ══
+        # 避免「賣出後資金永遠閒置」的問題——有現金就用策略設定再買
+        if mode == "dca" and capital > 1.0 and in_market and signal != 1:
+            reinvest = capital  # 全部閒置現金立即再買（維持滿倉精神）
+            position += reinvest / price
+            capital  -= reinvest
 
         portfolio_values.append(capital + position * price)
         invested_values.append(total_invested)
@@ -488,10 +486,12 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
         "cagr":             cagr,
         "max_drawdown":     float(drawdown.min()),
         "drawdown_series":  drawdown,
-        "buy_dates":        buy_dates,
+        "buy_dates":        buy_dates,       # 策略信號買入
         "sell_dates":       sell_dates,
         "buy_prices":       buy_prices,
         "sell_prices":      sell_prices,
+        "dca_buy_dates":    dca_buy_dates,   # DCA 定投（獨立）
+        "dca_buy_prices":   dca_buy_prices,
     }
 
 
@@ -602,7 +602,8 @@ def plot_equity(portfolio, bh_lump, bh_dca, strategy_name,
     return fig
 
 
-def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, sell_prices):
+def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, sell_prices,
+                     dca_buy_dates=None, dca_buy_prices=None):
     need_sub = strategy in ["RSI 動能策略", "MACD 趨勢策略", "MA均線偏離策略"]
     rows = 3 if need_sub else 2
     row_heights = [0.55, 0.2, 0.25] if need_sub else [0.65, 0.35]
@@ -643,13 +644,18 @@ def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, se
         line=dict(color="#f59e0b", width=1.2, dash="longdash"), opacity=0.9), row=1, col=1)
 
     if buy_dates:
-        fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode="markers", name="買入",
-            marker=dict(symbol="triangle-up", color="#16a34a", size=12,
+        fig.add_trace(go.Scatter(x=buy_dates, y=buy_prices, mode="markers", name="信號買入",
+            marker=dict(symbol="triangle-up", color="#16a34a", size=13,
                         line=dict(color="#fff", width=1))), row=1, col=1)
     if sell_dates:
-        fig.add_trace(go.Scatter(x=sell_dates, y=sell_prices, mode="markers", name="賣出",
-            marker=dict(symbol="triangle-down", color="#dc2626", size=12,
+        fig.add_trace(go.Scatter(x=sell_dates, y=sell_prices, mode="markers", name="信號賣出",
+            marker=dict(symbol="triangle-down", color="#dc2626", size=13,
                         line=dict(color="#fff", width=1))), row=1, col=1)
+    # DCA 定投標記：小圓點，不搶奪視覺焦點
+    if dca_buy_dates:
+        fig.add_trace(go.Scatter(x=dca_buy_dates, y=dca_buy_prices, mode="markers", name="DCA 定投",
+            marker=dict(symbol="circle", color="#f59e0b", size=5, opacity=0.6,
+                        line=dict(color="#fff", width=0.5))), row=1, col=1)
 
     vol_colors = ["#16a34a" if float(c.iloc[i]) >= float(df["Open"].squeeze().iloc[i])
                   else "#dc2626" for i in range(len(df))]
@@ -939,7 +945,12 @@ def main():
     m2.metric("策略 CAGR",  f"{result['cagr']:+.2%}",         delta=f"vs B&H {bh_cagr:+.2%}")
     m3.metric("策略最大回撤", f"{result['max_drawdown']:.2%}", delta=f"vs B&H {bh_dd:.2%}", delta_color="inverse")
     m4.metric("最終資產價值", f"${result['final_value']:,.0f}")
-    m5.metric("交易次數", f"{len(result['buy_dates'])} 買 / {len(result['sell_dates'])} 賣")
+    n_sig_buy = len(result["buy_dates"])
+    n_dca     = len(result["dca_buy_dates"])
+    n_sell    = len(result["sell_dates"])
+    trade_label = (f"DCA {n_dca}次 ＋ 信號買 {n_sig_buy}次 / 信號賣 {n_sell}次"
+                   if is_dca else f"信號買 {n_sig_buy}次 / 信號賣 {n_sell}次")
+    m5.metric("交易次數", trade_label)
     m6.metric("B&H 最終價值", f"${float(benchmark.iloc[-1]):,.0f}")
     st.markdown("---")
 
@@ -955,8 +966,9 @@ def main():
         st.plotly_chart(fig_eq, use_container_width=True)
     with tab2:
         st.plotly_chart(plot_candlestick(df, strategy, params,
-            result["buy_dates"], result["sell_dates"],
-            result["buy_prices"], result["sell_prices"]), use_container_width=True)
+            result["buy_dates"],     result["sell_dates"],
+            result["buy_prices"],    result["sell_prices"],
+            result["dca_buy_dates"], result["dca_buy_prices"]), use_container_width=True)
     with tab3:
         bh_dd_series = benchmark / benchmark.cummax() - 1
         fig_dd = go.Figure()
