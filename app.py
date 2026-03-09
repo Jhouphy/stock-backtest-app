@@ -477,10 +477,14 @@ def main():
         st.markdown("### 🎯 數據設定")
         ticker = st.text_input("股票代號", value="VOO", help="支援 VOO, QQQ, AAPL, COST 等").upper().strip()
         col_y1, col_y2 = st.columns(2)
-        years_back = col_y1.selectbox("回測年數", [1, 2, 3, 5, 7, 10], index=3)
+        years_back = col_y1.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 100], index=3)
         end_date   = col_y2.date_input("截止日期", value=datetime.today())
-        start_date = (datetime.combine(end_date, datetime.min.time())
-                      - timedelta(days=years_back * 365)).strftime("%Y-%m-%d")
+        end_dt     = datetime.combine(end_date, datetime.min.time())
+        try:
+            start_dt = end_dt.replace(year=end_dt.year - years_back)
+        except ValueError:
+            start_dt = end_dt.replace(year=end_dt.year - years_back, day=28)
+        start_date = start_dt.strftime("%Y-%m-%d")
         end_str    = end_date.strftime("%Y-%m-%d")
         initial_capital = st.number_input("初始投資金額 (USD)", min_value=1000,
             max_value=10_000_000, value=100_000, step=10_000, format="%d")
