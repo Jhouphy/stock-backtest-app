@@ -858,10 +858,10 @@ def main():
                 "MACD 指標：由快慢 EMA 差值構成，當 MACD 線上穿信號線時買入，下穿時賣出。"
                 "兼顧趨勢方向與動能變化，是最常用的趨勢追蹤指標之一。",
             "MA均線偏離策略":
-                "均線偏離回歸策略：當收盤價低於買入均線達設定百分比時買入，"
-                "高於賣出均線達設定百分比時賣出。"
-                "例如：低於60日均線 0% 買入（即跌破均線即買），高於5日均線 20% 時賣出。"
-                "買入/賣出可使用不同週期的均線，靈活度高。",
+                "均線偏離策略：當收盤價跌破買入均線時買入，"
+                "當收盤價高於賣出均線達設定百分比時賣出。"
+                "例如：跌破 30 日均線買入，高於 5 日均線 +10% 時賣出。"
+                "買入/賣出使用不同週期均線，可捕捉回調後的反彈行情。",
         }
         strategy = st.selectbox("選擇回測策略",
             list(STRATEGY_HELP.keys()),
@@ -887,27 +887,23 @@ def main():
                 params["macd_signal"] = st.slider("MACD 信號線", 5, 20, 9)
             elif strategy == "MA均線偏離策略":
                 st.markdown("**📉 買入條件**")
-                bc1, bc2 = st.columns(2)
-                params["dev_buy_period"] = bc1.number_input(
-                    "買入均線週期", min_value=5, max_value=500, value=60, step=5,
-                    help="計算買入基準的移動平均線週期，例如 60 表示 60 日均線")
-                params["dev_buy_pct"] = bc2.number_input(
-                    "低於均線 % 買入", min_value=-50.0, max_value=0.0, value=0.0, step=1.0,
-                    help="收盤價低於均線此百分比時觸發買入。0% = 跌破均線即買；-5% = 跌破均線再多跌 5% 才買")
+                params["dev_buy_period"] = st.number_input(
+                    "買入均線週期", min_value=5, max_value=500, value=30, step=5,
+                    help="當收盤價跌破此均線時買入。例如 30 = 跌破 30 日均線即買入")
+                params["dev_buy_pct"] = 0.0   # 固定為 0，跌破均線即買
+                st.caption(f"買入：收盤價跌破 {params['dev_buy_period']} 日均線時買入")
+
                 st.markdown("**📈 賣出條件**")
                 sc1, sc2 = st.columns(2)
                 params["dev_sell_period"] = sc1.number_input(
                     "賣出均線週期", min_value=5, max_value=500, value=5, step=5,
                     help="計算賣出基準的移動平均線週期，例如 5 表示 5 日均線")
                 params["dev_sell_pct"] = sc2.number_input(
-                    "高於均線 % 賣出", min_value=0.0, max_value=100.0, value=20.0, step=1.0,
-                    help="收盤價高於均線此百分比時觸發賣出。20% = 漲超均線 20% 才賣")
-                # 即時預覽說明
+                    "高於均線 % 賣出", min_value=0.1, max_value=100.0, value=20.0, step=0.5,
+                    help="收盤價高於此均線多少 % 時賣出。例如 10 = 漲超均線 10% 才賣")
                 st.caption(
-                    f"目前設定：收盤 ≤ {params['dev_buy_period']}日均線"
-                    f"{params['dev_buy_pct']:+.0f}% 買入 ／ "
-                    f"收盤 ≥ {params['dev_sell_period']}日均線"
-                    f"+{params['dev_sell_pct']:.0f}% 賣出"
+                    f"賣出：收盤價高於 {params['dev_sell_period']} 日均線 "
+                    f"+{params['dev_sell_pct']:.1f}% 時賣出"
                 )
 
         st.markdown("---")
