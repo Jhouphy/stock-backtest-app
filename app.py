@@ -345,7 +345,7 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     initial        = inv_cfg["initial"]
     mode           = inv_cfg.get("mode", "lump_sum")
     dca_amount     = inv_cfg.get("dca_amount", 0)
-    dca_day        = inv_cfg.get("dca_day", 1)
+    dca_freq       = inv_cfg.get("dca_freq", 1)   # 每月幾次（1/2/4）
     buy_mode       = inv_cfg.get("buy_mode", "all_in")
     buy_amount     = inv_cfg.get("buy_amount", initial)
     buy_pct        = inv_cfg.get("buy_pct", 1.0)
@@ -356,29 +356,30 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     capital        = float(initial)
     position       = 0.0
     in_market      = False
-    total_invested = float(initial)       # 追蹤累計投入資金
-    dca_invested   = 0.0                  # 定投累計金額
+    total_invested = float(initial)
+    dca_invested   = 0.0
     portfolio_values   = []
-    invested_values    = []               # 每日累計投入曲線
+    invested_values    = []
     buy_dates, sell_dates   = [], []
     buy_prices, sell_prices = [], []
     buy_amounts_list        = []
 
-    # 記錄已執行 DCA 的 (年, 月) 組合，避免同月重複投入
-    dca_done = set()
+    # 根據頻率計算每期間隔天數：1次≈30天, 2次≈15天, 4次≈7天
+    dca_interval = max(1, 30 // dca_freq)
+    last_dca_date = None   # 上次實際投入日期
 
     for i, (idx, row) in enumerate(df.iterrows()):
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
 
-        # ── 定投：每月指定日注入資金 ──
+        # ── 定投：按間隔天數注入資金（不依賴特定日期，確保每期都執行）──
         if mode == "dca" and dca_amount > 0:
-            ym = (idx.year, idx.month)
-            if ym not in dca_done and idx.day >= dca_day:
+            do_dca = (last_dca_date is None) or ((idx - last_dca_date).days >= dca_interval)
+            if do_dca:
                 capital        += dca_amount
                 total_invested += dca_amount
                 dca_invested   += dca_amount
-                dca_done.add(ym)
+                last_dca_date   = idx
 
         # ── 買入邏輯 ──
         if signal == 1:
@@ -452,22 +453,23 @@ def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> tuple:
     initial    = inv_cfg["initial"]
     mode       = inv_cfg.get("mode", "lump_sum")
     dca_amount = inv_cfg.get("dca_amount", 0)
-    dca_day    = inv_cfg.get("dca_day", 1)
+    dca_freq   = inv_cfg.get("dca_freq", 1)
 
     # 初始全倉買入
     total_invested = float(initial)
     shares         = float(initial) / float(c.iloc[0])
-    dca_done       = set()
+    dca_interval   = max(1, 30 // dca_freq)
+    last_dca_date  = None
     values         = []
 
     for i, idx in enumerate(df.index):
         price = float(c.iloc[i])
         if mode == "dca" and dca_amount > 0:
-            ym = (idx.year, idx.month)
-            if ym not in dca_done and idx.day >= dca_day:
+            do_dca = (last_dca_date is None) or ((idx - last_dca_date).days >= dca_interval)
+            if do_dca:
                 shares         += dca_amount / price
                 total_invested += dca_amount
-                dca_done.add(ym)
+                last_dca_date   = idx
         values.append(shares * price)
 
     return pd.Series(values, index=df.index), total_invested
@@ -614,18 +616,17 @@ def main():
             horizontal=True,
             help="一次性：回測起始日全額買入。定期定額：每月固定日注入資金，模擬長期積累。")
 
-        dca_amount, dca_day = 0, 1
+        dca_amount, dca_freq = 0, 1
         if inv_mode == "定期定額 (DCA)":
             dc1, dc2 = st.columns(2)
-            dca_amount = dc1.number_input("每期投入 ($)", min_value=100,
+            dca_amount = dc1.number_input("每次投入 ($)", min_value=100,
                 max_value=1_000_000, value=3_000, step=500, format="%d")
-            dca_day = dc2.number_input("每月投入日", min_value=1,
-                max_value=28, value=1, step=1, format="%d",
-                help="選擇每月幾號執行定投（1~28，避免月底問題）")
+            dca_freq = dc2.selectbox("每月投入次數", [1, 2, 4],
+                format_func=lambda x: {1: "1次（月投）", 2: "2次（雙週投）", 4: "4次（週投）"}[x],
+                help="1次=每月初投入一次；2次=每兩週投入一次；4次=每週投入一次")
             # 估算總投入
-            years_est = years_back
-            total_est = initial_capital + dca_amount * 12 * years_est
-            st.info(f"💡 預估總投入：${total_est:,.0f}　（初始 ${initial_capital:,} + 定投 ${dca_amount:,}/月 × {years_est}年）")
+            total_est = initial_capital + dca_amount * dca_freq * 12 * years_back
+            st.info(f"💡 預估總投入：${total_est:,.0f}　（初始 ${initial_capital:,} + ${dca_amount:,} × {dca_freq}次/月 × {years_back}年）")
 
         # ── 每次買入倉位 ──
         st.markdown("### 🎚️ 倉位控制")
@@ -656,7 +657,7 @@ def main():
             "initial":     initial_capital,
             "mode":        "dca" if inv_mode == "定期定額 (DCA)" else "lump_sum",
             "dca_amount":  dca_amount,
-            "dca_day":     dca_day,
+            "dca_freq":    dca_freq,
             "buy_mode":    {"全倉買入": "all_in", "固定金額": "fixed_amount", "固定比例 %": "fixed_pct"}[buy_mode_label],
             "buy_amount":  buy_amount,
             "buy_pct":     buy_pct,
