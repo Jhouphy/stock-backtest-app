@@ -320,13 +320,35 @@ def generate_signals(df: pd.DataFrame, strategy: str, params: dict) -> pd.DataFr
             np.where((df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1)), -1, 0))
 
     elif strategy == "MA均線偏離策略":
-        buy_th  = params["dev_buy_pct"]    # 低於均線 N%（負值或0）才買
-        sell_th = params["dev_sell_pct"]   # 高於均線 N%（正值）才賣
-        # 買入：偏離率 <= buy_th（例如 -5% 表示跌破均線 5% 才買；0% 表示跌破均線即買）
-        # 賣出：偏離率 >= sell_th（例如 +20% 表示漲超均線 20% 才賣）
-        df["Signal"] = np.where(
-            (df["Dev_Buy"] <= buy_th) & (df["Dev_Buy"].shift(1) > buy_th), 1,
-            np.where((df["Dev_Sell"] >= sell_th) & (df["Dev_Sell"].shift(1) < sell_th), -1, 0))
+        buy_th  = params["dev_buy_pct"]   # 低於均線 N%（負值或0）才買，例如 0 = 跌破均線即買
+        sell_th = params["dev_sell_pct"]  # 高於均線 N%（正值）才賣，例如 10 = 漲超 10% 賣
+
+        # ── State-based 狀態機（持倉狀態決定邏輯，不是瞬間穿越）──
+        # 原本的 crossover 寫法只在「穿越那一天」才有訊號，
+        # 若均線一直沒被穿越則永遠沒訊號，且 acc1/acc2 初始持現金也進不了場。
+        # 改成：空倉時只要條件符合就買入；持倉時只要條件符合就賣出。
+        dev_buy_col  = df["Dev_Buy"].values
+        dev_sell_col = df["Dev_Sell"].values
+        ma_buy_col   = df[f"BuyMA{params['dev_buy_period']}"].values
+        signals_arr  = np.zeros(len(df), dtype=int)
+        in_pos = False
+
+        for idx_i in range(len(df)):
+            # 跳過均線尚未形成（NaN）的期間
+            if np.isnan(dev_buy_col[idx_i]) or np.isnan(dev_sell_col[idx_i]):
+                continue
+            if not in_pos:
+                # 空倉：收盤偏離率 <= 買入門檻 → 買入
+                if dev_buy_col[idx_i] <= buy_th:
+                    signals_arr[idx_i] = 1
+                    in_pos = True
+            else:
+                # 持倉：收盤偏離率 >= 賣出門檻 → 賣出
+                if dev_sell_col[idx_i] >= sell_th:
+                    signals_arr[idx_i] = -1
+                    in_pos = False
+
+        df["Signal"] = signals_arr
 
     return df
 
