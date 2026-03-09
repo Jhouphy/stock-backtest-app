@@ -397,14 +397,22 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
 
-        # ── 定投：注入日期命中時加入資金 ──
+        # ══ DCA 模式：定投日直接買入股票（這才是定期定額的本質）══
+        # 邏輯：不管信號，每到投入日就用 dca_amount 直接買股
+        # 策略信號只額外控制「加碼買入」與「賣出」
         if mode == "dca" and dca_amount > 0 and idx in dca_dates:
-            capital        += dca_amount
             total_invested += dca_amount
             dca_invested   += dca_amount
+            # 直接以當日收盤價買入股票，不放進 capital
+            dca_shares      = dca_amount / price
+            position       += dca_shares
+            in_market       = True   # 有持倉即視為在市場中
+            buy_dates.append(idx)
+            buy_prices.append(price)
+            buy_amounts_list.append(dca_amount)
 
-        # ── 買入邏輯 ──
-        if signal == 1:
+        # ══ 策略買入：用剩餘現金加碼（僅 lump_sum 模式或 DCA 有剩餘現金時）══
+        if signal == 1 and capital > 1.0:
             if buy_mode == "all_in":
                 use_cash = capital
             elif buy_mode == "fixed_amount":
@@ -412,17 +420,19 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
             else:  # fixed_pct
                 use_cash = capital * buy_pct
 
-            if use_cash > 1.0 and not in_market:
+            if use_cash > 1.0:
                 shares    = use_cash / price
                 position += shares
                 capital  -= use_cash
                 in_market = True
-                buy_dates.append(idx)
-                buy_prices.append(price)
-                buy_amounts_list.append(use_cash)
+                # DCA 模式下策略買入不重複記錄（避免圖表符號爆炸）
+                if mode == "lump_sum":
+                    buy_dates.append(idx)
+                    buy_prices.append(price)
+                    buy_amounts_list.append(use_cash)
 
-        # ── 賣出邏輯 ──
-        elif signal == -1 and in_market:
+        # ══ 策略賣出：賣出持倉，賣出所得放回 capital（等待下次 DCA 或信號再買）══
+        elif signal == -1 and in_market and position > 1e-6:
             if sell_mode == "all_out":
                 sell_shares = position
             elif sell_mode == "fixed_amount":
