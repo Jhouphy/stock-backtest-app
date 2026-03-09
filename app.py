@@ -364,22 +364,44 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     buy_prices, sell_prices = [], []
     buy_amounts_list        = []
 
-    # 根據頻率計算每期間隔天數：1次≈30天, 2次≈15天, 4次≈7天
-    dca_interval = max(1, 30 // dca_freq)
-    last_dca_date = None   # 上次實際投入日期
+    # ── 預先計算 DCA 注入日期（基於真實交易日曆，確保每期都觸發）──
+    trading_days = df.index
+    dca_dates = set()
+    if mode == "dca" and dca_amount > 0:
+        if dca_freq == 1:
+            # 每月第一個交易日
+            seen_months = set()
+            for d in trading_days:
+                ym = (d.year, d.month)
+                if ym not in seen_months:
+                    dca_dates.add(d)
+                    seen_months.add(ym)
+        elif dca_freq == 2:
+            # 每月第一個交易日 + 最接近 16 號的交易日
+            first_of_month = {}
+            for d in trading_days:
+                ym = (d.year, d.month)
+                if ym not in first_of_month:
+                    first_of_month[ym] = d
+            second_of_month = {}
+            for d in trading_days:
+                ym = (d.year, d.month)
+                if ym not in second_of_month and d.day >= 15:
+                    second_of_month[ym] = d
+            dca_dates = set(first_of_month.values()) | set(second_of_month.values())
+        elif dca_freq == 4:
+            # 每 5 個交易日（週投）
+            dca_dates = set(trading_days[::5])
 
     for i, (idx, row) in enumerate(df.iterrows()):
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
 
-        # ── 定投：按間隔天數注入資金（不依賴特定日期，確保每期都執行）──
-        if mode == "dca" and dca_amount > 0:
-            do_dca = (last_dca_date is None) or ((idx - last_dca_date).days >= dca_interval)
-            if do_dca:
-                capital        += dca_amount
-                total_invested += dca_amount
-                dca_invested   += dca_amount
-                last_dca_date   = idx
+        # ── 定投：注入日期命中時加入資金 ──
+        if mode == "dca" and dca_amount > 0 and idx in dca_dates:
+            capital        += dca_amount
+            total_invested += dca_amount
+            dca_invested   += dca_amount
 
         # ── 買入邏輯 ──
         if signal == 1:
@@ -455,21 +477,39 @@ def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> tuple:
     dca_amount = inv_cfg.get("dca_amount", 0)
     dca_freq   = inv_cfg.get("dca_freq", 1)
 
+    # 預先計算 DCA 注入日期（與 run_backtest 邏輯一致）
+    trading_days = df.index
+    dca_dates = set()
+    if mode == "dca" and dca_amount > 0:
+        if dca_freq == 1:
+            seen_months = set()
+            for d in trading_days:
+                ym = (d.year, d.month)
+                if ym not in seen_months:
+                    dca_dates.add(d)
+                    seen_months.add(ym)
+        elif dca_freq == 2:
+            first_of_month, second_of_month = {}, {}
+            for d in trading_days:
+                ym = (d.year, d.month)
+                if ym not in first_of_month:
+                    first_of_month[ym] = d
+                if ym not in second_of_month and d.day >= 15:
+                    second_of_month[ym] = d
+            dca_dates = set(first_of_month.values()) | set(second_of_month.values())
+        elif dca_freq == 4:
+            dca_dates = set(trading_days[::5])
+
     # 初始全倉買入
     total_invested = float(initial)
     shares         = float(initial) / float(c.iloc[0])
-    dca_interval   = max(1, 30 // dca_freq)
-    last_dca_date  = None
     values         = []
 
     for i, idx in enumerate(df.index):
         price = float(c.iloc[i])
-        if mode == "dca" and dca_amount > 0:
-            do_dca = (last_dca_date is None) or ((idx - last_dca_date).days >= dca_interval)
-            if do_dca:
-                shares         += dca_amount / price
-                total_invested += dca_amount
-                last_dca_date   = idx
+        if mode == "dca" and dca_amount > 0 and idx in dca_dates:
+            shares         += dca_amount / price
+            total_invested += dca_amount
         values.append(shares * price)
 
     return pd.Series(values, index=df.index), total_invested
