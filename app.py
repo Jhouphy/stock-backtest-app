@@ -262,6 +262,12 @@ def main():
     _flush_pending_apply()
     # _auto_run 在此就取出，避免之後 widget rerun 時被丟失
     _auto_run = st.session_state.pop("_auto_run", False)
+    if _auto_run:
+        # 滾回頁面頂部，讓使用者看到回測執行過程
+        st.components.v1.html(
+            "<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
+            height=0,
+        )
 
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
@@ -487,6 +493,8 @@ def main():
             col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
             col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
         else:
+            if _auto_run:
+                st.success("✅ 已套用最佳化設定，正在執行回測...", icon="🚀")
 
             with st.spinner(f"正在下載 {ticker} 數據..."):
                 df_raw = fetch_data(ticker, start_date, end_str)
