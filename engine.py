@@ -8,6 +8,8 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import warnings
 import urllib.request, json as _json
 warnings.filterwarnings("ignore")
