@@ -201,12 +201,12 @@ st.markdown("""
 }
 /* ── Plotly 工具列放大 ── */
 .modebar {
-    transform: scale(1.5) !important;
+    transform: scale(1.2) !important;
     transform-origin: top right !important;
 }
 .modebar-btn svg {
-    width: 20px !important;
-    height: 20px !important;
+    width: 16px !important;
+    height: 16px !important;
 }
 </style>
 """, unsafe_allow_html=True)
