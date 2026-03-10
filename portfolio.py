@@ -412,6 +412,7 @@ def plot_portfolio_equity(
         plot_bgcolor=CHART["plot_bgcolor"],
         font=CHART["font"],
         hovermode="x unified", height=450,
+        dragmode="pan",
         legend=dict(bgcolor="rgba(255,255,255,0.9)",
                     bordercolor="#e2e8f0", borderwidth=1),
         margin=dict(l=10, r=10, t=50, b=10),
@@ -429,6 +430,7 @@ def plot_portfolio_drawdown(port_result: dict) -> go.Figure:
         name="組合回撤",
     ))
     fig.update_layout(
+        dragmode="pan",
         title=dict(text="📉 組合回撤曲線", font=dict(size=13, color="#0f172a")),
         xaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"]),
         yaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"],
@@ -719,7 +721,7 @@ def render_portfolio_tab():
                     locale="zh-TW", displayModeBar=True,
                     modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
                     toImageButtonOptions={"format":"png","filename":"portfolio_equity","scale":2},
-                    displaylogo=False,
+                    displaylogo=False, scrollZoom=False,
                 )
             )
         with right:
@@ -727,7 +729,7 @@ def render_portfolio_tab():
                             use_container_width=True,
                             config=dict(locale="zh-TW", displayModeBar=True,
                                 toImageButtonOptions={"format":"png","filename":"portfolio_weights","scale":2},
-                                displaylogo=False))
+                                displaylogo=False, scrollZoom=False))
 
     with pt2:
         real_prices = prices_final[[t for t in final_tickers if t != "CASH"]]
@@ -736,7 +738,7 @@ def render_portfolio_tab():
                             use_container_width=True,
                             config=dict(locale="zh-TW", displayModeBar=True,
                                 toImageButtonOptions={"format":"png","filename":"correlation_heatmap","scale":2},
-                                displaylogo=False))
+                                displaylogo=False, scrollZoom=False))
             # 解讀提示
             daily_r = real_prices.pct_change().dropna()
             corr    = daily_r.corr()
@@ -763,7 +765,7 @@ def render_portfolio_tab():
                         config=dict(locale="zh-TW", displayModeBar=True,
                             modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
                             toImageButtonOptions={"format":"png","filename":"portfolio_drawdown","scale":2},
-                            displaylogo=False))
+                            displaylogo=False, scrollZoom=False))
 
     with pt4:
         if not asset_stats.empty:
