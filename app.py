@@ -1287,6 +1287,11 @@ def main():
     is_dca = inv_cfg["mode"] == "dca"
     years  = (df.index[-1] - df.index[0]).days / 365.25
 
+    # 把回測所需資料存入 session_state，讓最佳化按鈕跨次重新執行時能取用
+    st.session_state["_opt_df_raw"]  = df_raw
+    st.session_state["_opt_inv_cfg"] = inv_cfg
+    st.session_state["_opt_ticker"]  = ticker
+
     # 取主策略帳戶（DCA模式用acc2，一次性用acc1）
     main_series   = result["acc2_series"]   if is_dca else result["acc1_series"]
     main_final    = result["acc2_final"]    if is_dca else result["acc1_final"]
@@ -1513,10 +1518,19 @@ def main():
                             disabled=(total_w != 100))
 
     if run_opt:
+        # 從 session_state 取回測資料（避免按鈕點擊觸發重跑時變數消失）
+        _df_raw  = st.session_state.get("_opt_df_raw")
+        _inv_cfg = st.session_state.get("_opt_inv_cfg")
+        _ticker  = st.session_state.get("_opt_ticker", ticker)
+
+        if _df_raw is None or _inv_cfg is None:
+            st.error("⚠️ 請先點擊「執行回測分析」完成回測，再執行最佳化。")
+            st.stop()
+
         weight_desc = (f"CAGR {w_cagr}% ／ 夏普 {w_shar}% ／ "
                        f"回撤 {w_dd}% ／ 穩定性 {w_stab}%")
         with st.spinner("Grid Search 執行中，約需 10~30 秒..."):
-            opt_results = run_grid_search(df_raw, inv_cfg, weights)
+            opt_results = run_grid_search(_df_raw, _inv_cfg, weights)
         if not opt_results:
             st.error("最佳化失敗，請確認數據是否充足（建議至少 3 年）。")
         else:
@@ -1543,7 +1557,7 @@ def main():
             if api_key.startswith("sk-ant-"):
                 with st.spinner("Claude AI 分析中..."):
                     ai_analysis = call_claude_analysis(
-                        api_key, ticker, top10, weights)
+                        api_key, _ticker, top10, weights)
                 st.markdown("### 🤖 Claude AI 策略解讀")
                 st.markdown(ai_analysis)
             elif api_key:
