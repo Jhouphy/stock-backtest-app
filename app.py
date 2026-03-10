@@ -5,6 +5,7 @@
 """
 
 import streamlit as st
+from portfolio import render_portfolio_tab
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -1161,10 +1162,11 @@ def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, se
 # ═══════════════════════════════════════════════════════
 
 def main():
-    st.markdown('<div class="main-title">📈 股票<span>回測</span>分析平台</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Multi-Strategy Backtesting · VCP Screening · Performance Analytics</div>',
+    st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
+    st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
                 unsafe_allow_html=True)
 
+    # ── 側邊欄（全域，兩個 Tab 共用標題）──
     with st.sidebar:
         st.markdown("### 🎯 數據設定")
         ticker = st.text_input(
@@ -1365,385 +1367,393 @@ def main():
         st.markdown("---")
         run_btn = st.button("🚀 執行回測分析", type="primary")
 
-    if not run_btn:
-        st.info("👈 請在左側設定參數後，點擊「執行回測分析」開始分析。", icon="💡")
-        col1, col2, col3, col4 = st.columns(4)
-        col1.markdown("**MA 交叉策略**\n\n快慢均線黃金/死亡交叉，捕捉趨勢轉換。")
-        col2.markdown("**RSI 動能策略**\n\n超賣買入、超買賣出，適合震盪行情。")
-        col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
-        col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
-    else:
 
-        with st.spinner(f"正在下載 {ticker} 數據..."):
-            df_raw = fetch_data(ticker, start_date, end_str)
+    # ── 主分頁（sidebar 在兩個 Tab 共用）──
+    main_tab1, main_tab2 = st.tabs(["🎯 單一標的策略回測", "💼 資產配置組合分析"])
+
+    with main_tab2:
+        render_portfolio_tab()
+
+    with main_tab1:
+        if not run_btn:
+            st.info("👈 請在左側設定參數後，點擊「執行回測分析」開始分析。", icon="💡")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.markdown("**MA 交叉策略**\n\n快慢均線黃金/死亡交叉，捕捉趨勢轉換。")
+            col2.markdown("**RSI 動能策略**\n\n超賣買入、超買賣出，適合震盪行情。")
+            col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
+            col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
+        else:
+
+            with st.spinner(f"正在下載 {ticker} 數據..."):
+                df_raw = fetch_data(ticker, start_date, end_str)
     
-        if df_raw.empty:
-            st.error(f"❌ 無法取得 **{ticker}** 的數據，請確認股票代號是否正確。")
-            return
+            if df_raw.empty:
+                st.error(f"❌ 無法取得 **{ticker}** 的數據，請確認股票代號是否正確。")
+                return
     
-        with st.spinner("計算技術指標中..."):
-            df = compute_indicators(df_raw, strategy, params)
+            with st.spinner("計算技術指標中..."):
+                df = compute_indicators(df_raw, strategy, params)
     
-        if df.empty or len(df) < 50:
-            st.error("數據不足，請增加回測年數或更換股票。")
-            return
+            if df.empty or len(df) < 50:
+                st.error("數據不足，請增加回測年數或更換股票。")
+                return
     
-        df = generate_signals(df, strategy, params)
+            df = generate_signals(df, strategy, params)
     
-        if enable_vcp:
-            vcp = check_vcp(df)
-            st.markdown("#### 🔬 VCP 波動收縮模式檢查")
-            v1, v2, v3, v4 = st.columns(4)
-            v1.markdown(f"{'✅' if vcp['close_above_ma200'] else '❌'} **收盤 > MA200**")
-            v2.markdown(f"{'✅' if vcp['ma150_above_ma200'] else '❌'} **MA150 > MA200**")
-            v3.markdown(f"{'✅' if vcp['above_52w_low_25pct'] else '❌'} **高於52週低 +25%**")
-            v4.markdown(f"{'✅' if vcp['volatility_contraction'] else '❌'} **波動率收縮**")
-            if vcp["passed"]:
-                st.markdown('<div class="vcp-pass">✅ VCP 條件全部通過 — 策略信號有效啟用</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="vcp-fail">⛔ VCP 條件未完全通過 — 策略信號已被過濾</div>', unsafe_allow_html=True)
-                df["Signal"] = 0
+            if enable_vcp:
+                vcp = check_vcp(df)
+                st.markdown("#### 🔬 VCP 波動收縮模式檢查")
+                v1, v2, v3, v4 = st.columns(4)
+                v1.markdown(f"{'✅' if vcp['close_above_ma200'] else '❌'} **收盤 > MA200**")
+                v2.markdown(f"{'✅' if vcp['ma150_above_ma200'] else '❌'} **MA150 > MA200**")
+                v3.markdown(f"{'✅' if vcp['above_52w_low_25pct'] else '❌'} **高於52週低 +25%**")
+                v4.markdown(f"{'✅' if vcp['volatility_contraction'] else '❌'} **波動率收縮**")
+                if vcp["passed"]:
+                    st.markdown('<div class="vcp-pass">✅ VCP 條件全部通過 — 策略信號有效啟用</div>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="vcp-fail">⛔ VCP 條件未完全通過 — 策略信號已被過濾</div>', unsafe_allow_html=True)
+                    df["Signal"] = 0
+                st.markdown("---")
+    
+            result = run_backtest(df, inv_cfg, ts_cfg)
+            bm     = compute_benchmark(df, inv_cfg)
+            is_dca = inv_cfg["mode"] == "dca"
+            years  = (df.index[-1] - df.index[0]).days / 365.25
+    
+            # 把回測所需資料存入 session_state，讓最佳化按鈕跨次重新執行時能取用
+            st.session_state["_opt_df_raw"]  = df_raw
+            st.session_state["_opt_inv_cfg"] = inv_cfg
+            st.session_state["_opt_ticker"]  = ticker
+    
+            # 取主策略帳戶（DCA模式用acc2，一次性用acc1）
+            main_series   = result["acc2_series"]   if is_dca else result["acc1_series"]
+            main_final    = result["acc2_final"]    if is_dca else result["acc1_final"]
+            main_invested = result["acc2_invested"] if is_dca else result["acc1_invested"]
+            main_return   = result["acc2_return"]   if is_dca else result["acc1_return"]
+            main_cagr     = result["acc2_cagr"]     if is_dca else result["acc1_cagr"]
+            main_drawdown = result["acc2_drawdown"] if is_dca else result["acc1_drawdown"]
+            main_dd_series= result["acc2_dd_series"]if is_dca else result["acc1_dd_series"]
+    
+            # 比較基準（DCA模式對比acc3，一次性對比acc4）
+            bh_series   = bm["acc3_series"]   if is_dca else bm["acc4_series"]
+            bh_invested = bm["acc3_invested"] if is_dca else bm["acc4_invested"]
+            bh_final    = float(bh_series.iloc[-1])
+            bh_return   = (bh_final - bh_invested) / bh_invested
+            bh_cagr     = (bh_final / bh_invested) ** (1 / max(years, 0.01)) - 1
+            bh_dd       = float((bh_series / bh_series.cummax() - 1).min())
+    
+            c = df["Close"].squeeze()
+            i1, i2, i3, i4, i5 = st.columns(5)
+            i1.metric("股票代號", ticker)
+            i2.metric("最新收盤價", f"${float(c.iloc[-1]):,.2f}")
+            i3.metric("回測期間漲跌", f"{(float(c.iloc[-1])-float(c.iloc[0]))/float(c.iloc[0]):+.1%}")
+            i4.metric("數據起始", df.index[0].strftime("%Y-%m-%d"))
+            i5.metric("數據截止", df.index[-1].strftime("%Y-%m-%d"))
             st.markdown("---")
     
-        result = run_backtest(df, inv_cfg, ts_cfg)
-        bm     = compute_benchmark(df, inv_cfg)
-        is_dca = inv_cfg["mode"] == "dca"
-        years  = (df.index[-1] - df.index[0]).days / 365.25
+            inv_mode_label = "定期定額 (DCA)" if is_dca else "一次性投入"
+            st.markdown(f'<div class="strategy-badge">STRATEGY: {strategy.upper()} ・ {inv_mode_label}</div>',
+                        unsafe_allow_html=True)
     
-        # 把回測所需資料存入 session_state，讓最佳化按鈕跨次重新執行時能取用
-        st.session_state["_opt_df_raw"]  = df_raw
-        st.session_state["_opt_inv_cfg"] = inv_cfg
-        st.session_state["_opt_ticker"]  = ticker
+            ci1, ci2, ci3 = st.columns(3)
+            ci1.metric("初始投入", f"${inv_cfg['initial']:,.0f}")
+            ci2.metric("DCA 累計投入" if is_dca else "投入方式",
+                       f"${result['dca_invested']:,.0f}" if is_dca else "一次性")
+            ci3.metric("主帳戶總投入", f"${main_invested:,.0f}",
+                       delta=f"基準總投入 ${bh_invested:,.0f}")
+            st.markdown("---")
     
-        # 取主策略帳戶（DCA模式用acc2，一次性用acc1）
-        main_series   = result["acc2_series"]   if is_dca else result["acc1_series"]
-        main_final    = result["acc2_final"]    if is_dca else result["acc1_final"]
-        main_invested = result["acc2_invested"] if is_dca else result["acc1_invested"]
-        main_return   = result["acc2_return"]   if is_dca else result["acc1_return"]
-        main_cagr     = result["acc2_cagr"]     if is_dca else result["acc1_cagr"]
-        main_drawdown = result["acc2_drawdown"] if is_dca else result["acc1_drawdown"]
-        main_dd_series= result["acc2_dd_series"]if is_dca else result["acc1_dd_series"]
+            st.markdown("#### 📊 績效指標對比（主策略帳戶 vs 買入持有基準）")
+            m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
+            m1.metric("策略總報酬", f"{main_return:+.2%}",   delta=f"vs B&H {bh_return:+.2%}")
+            m2.metric("策略 CAGR",  f"{main_cagr:+.2%}",    delta=f"vs B&H {bh_cagr:+.2%}")
+            m3.metric("策略最大回撤", f"{main_drawdown:.2%}", delta=f"vs B&H {bh_dd:.2%}", delta_color="inverse")
+            m4.metric("策略最終資產", f"${main_final:,.0f}")
+            m5.metric("B&H 最終資產", f"${bh_final:,.0f}")
+            n_dca  = len(result["dca_buy_dates"])
+            n_buy  = len(result["buy_dates"])
+            n_sell = len(result["sell_dates"])
+            m6.metric("DCA 定投次數", f"{n_dca} 次" if is_dca else "—")
+            m7.metric("信號買 / 賣",  f"{n_buy} / {n_sell}")
+            st.markdown("---")
     
-        # 比較基準（DCA模式對比acc3，一次性對比acc4）
-        bh_series   = bm["acc3_series"]   if is_dca else bm["acc4_series"]
-        bh_invested = bm["acc3_invested"] if is_dca else bm["acc4_invested"]
-        bh_final    = float(bh_series.iloc[-1])
-        bh_return   = (bh_final - bh_invested) / bh_invested
-        bh_cagr     = (bh_final / bh_invested) ** (1 / max(years, 0.01)) - 1
-        bh_dd       = float((bh_series / bh_series.cummax() - 1).min())
+            tab1, tab2, tab3, tab4 = st.tabs(["📈 資產增長曲線", "🕯️ K線圖與買賣標記", "📉 回撤分析", "💰 現金比例診斷"])
     
-        c = df["Close"].squeeze()
-        i1, i2, i3, i4, i5 = st.columns(5)
-        i1.metric("股票代號", ticker)
-        i2.metric("最新收盤價", f"${float(c.iloc[-1]):,.2f}")
-        i3.metric("回測期間漲跌", f"{(float(c.iloc[-1])-float(c.iloc[0]))/float(c.iloc[0]):+.1%}")
-        i4.metric("數據起始", df.index[0].strftime("%Y-%m-%d"))
-        i5.metric("數據截止", df.index[-1].strftime("%Y-%m-%d"))
-        st.markdown("---")
+            with tab1:
+                st.plotly_chart(plot_equity(result, bm, strategy, is_dca),
+                                use_container_width=True)
     
-        inv_mode_label = "定期定額 (DCA)" if is_dca else "一次性投入"
-        st.markdown(f'<div class="strategy-badge">STRATEGY: {strategy.upper()} ・ {inv_mode_label}</div>',
-                    unsafe_allow_html=True)
+            with tab2:
+                st.plotly_chart(plot_candlestick(df, strategy, params,
+                    result["buy_dates"],     result["sell_dates"],
+                    result["buy_prices"],    result["sell_prices"],
+                    result["dca_buy_dates"], result["dca_buy_prices"]),
+                    use_container_width=True)
     
-        ci1, ci2, ci3 = st.columns(3)
-        ci1.metric("初始投入", f"${inv_cfg['initial']:,.0f}")
-        ci2.metric("DCA 累計投入" if is_dca else "投入方式",
-                   f"${result['dca_invested']:,.0f}" if is_dca else "一次性")
-        ci3.metric("主帳戶總投入", f"${main_invested:,.0f}",
-                   delta=f"基準總投入 ${bh_invested:,.0f}")
-        st.markdown("---")
-    
-        st.markdown("#### 📊 績效指標對比（主策略帳戶 vs 買入持有基準）")
-        m1, m2, m3, m4, m5, m6, m7 = st.columns(7)
-        m1.metric("策略總報酬", f"{main_return:+.2%}",   delta=f"vs B&H {bh_return:+.2%}")
-        m2.metric("策略 CAGR",  f"{main_cagr:+.2%}",    delta=f"vs B&H {bh_cagr:+.2%}")
-        m3.metric("策略最大回撤", f"{main_drawdown:.2%}", delta=f"vs B&H {bh_dd:.2%}", delta_color="inverse")
-        m4.metric("策略最終資產", f"${main_final:,.0f}")
-        m5.metric("B&H 最終資產", f"${bh_final:,.0f}")
-        n_dca  = len(result["dca_buy_dates"])
-        n_buy  = len(result["buy_dates"])
-        n_sell = len(result["sell_dates"])
-        m6.metric("DCA 定投次數", f"{n_dca} 次" if is_dca else "—")
-        m7.metric("信號買 / 賣",  f"{n_buy} / {n_sell}")
-        st.markdown("---")
-    
-        tab1, tab2, tab3, tab4 = st.tabs(["📈 資產增長曲線", "🕯️ K線圖與買賣標記", "📉 回撤分析", "💰 現金比例診斷"])
-    
-        with tab1:
-            st.plotly_chart(plot_equity(result, bm, strategy, is_dca),
-                            use_container_width=True)
-    
-        with tab2:
-            st.plotly_chart(plot_candlestick(df, strategy, params,
-                result["buy_dates"],     result["sell_dates"],
-                result["buy_prices"],    result["sell_prices"],
-                result["dca_buy_dates"], result["dca_buy_prices"]),
-                use_container_width=True)
-    
-        with tab3:
-            fig_dd = go.Figure()
-            # 主策略回撤
-            fig_dd.add_trace(go.Scatter(
-                x=main_dd_series.index, y=main_dd_series.values * 100,
-                name=strategy + (" ＋DCA" if is_dca else ""),
-                line=dict(color="#dc2626", width=1.5),
-                fill="tozeroy", fillcolor="rgba(220,38,38,0.08)"))
-            # acc1 純策略回撤（DCA模式才顯示）
-            if is_dca:
+            with tab3:
+                fig_dd = go.Figure()
+                # 主策略回撤
                 fig_dd.add_trace(go.Scatter(
-                    x=result["acc1_dd_series"].index, y=result["acc1_dd_series"].values * 100,
-                    name=strategy + "（無DCA）",
-                    line=dict(color="#f87171", width=1.2, dash="longdash")))
-            # B&H 基準回撤
-            bh_dd_s = bh_series / bh_series.cummax() - 1
-            fig_dd.add_trace(go.Scatter(
-                x=bh_dd_s.index, y=bh_dd_s.values * 100,
-                name="B&H 基準",
-                line=dict(color="#94a3b8", width=1.2, dash="dot")))
-            fig_dd.update_layout(
-                title=dict(text="📉 回撤對比", font=dict(size=14, color="#0f172a")),
-                xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
-                yaxis=dict(showgrid=True, gridcolor="#e2e8f0", ticksuffix="%"),
-                paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc", font=CHART["font"],
-                legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#e2e8f0", borderwidth=1),
-                hovermode="x unified", height=380, margin=dict(l=10,r=10,t=50,b=10))
-            st.plotly_chart(fig_dd, use_container_width=True)
+                    x=main_dd_series.index, y=main_dd_series.values * 100,
+                    name=strategy + (" ＋DCA" if is_dca else ""),
+                    line=dict(color="#dc2626", width=1.5),
+                    fill="tozeroy", fillcolor="rgba(220,38,38,0.08)"))
+                # acc1 純策略回撤（DCA模式才顯示）
+                if is_dca:
+                    fig_dd.add_trace(go.Scatter(
+                        x=result["acc1_dd_series"].index, y=result["acc1_dd_series"].values * 100,
+                        name=strategy + "（無DCA）",
+                        line=dict(color="#f87171", width=1.2, dash="longdash")))
+                # B&H 基準回撤
+                bh_dd_s = bh_series / bh_series.cummax() - 1
+                fig_dd.add_trace(go.Scatter(
+                    x=bh_dd_s.index, y=bh_dd_s.values * 100,
+                    name="B&H 基準",
+                    line=dict(color="#94a3b8", width=1.2, dash="dot")))
+                fig_dd.update_layout(
+                    title=dict(text="📉 回撤對比", font=dict(size=14, color="#0f172a")),
+                    xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
+                    yaxis=dict(showgrid=True, gridcolor="#e2e8f0", ticksuffix="%"),
+                    paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc", font=CHART["font"],
+                    legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#e2e8f0", borderwidth=1),
+                    hovermode="x unified", height=380, margin=dict(l=10,r=10,t=50,b=10))
+                st.plotly_chart(fig_dd, use_container_width=True)
     
-        with tab4:
-            # ── 現金比例 = 現金池 / 總資產 ──
-            a1_cash_s = result["acc1_cash_series"]
-            a2_cash_s = result["acc2_cash_series"]
-            a1_total_s = result["acc1_series"]
-            a2_total_s = result["acc2_series"]
+            with tab4:
+                # ── 現金比例 = 現金池 / 總資產 ──
+                a1_cash_s = result["acc1_cash_series"]
+                a2_cash_s = result["acc2_cash_series"]
+                a1_total_s = result["acc1_series"]
+                a2_total_s = result["acc2_series"]
     
-            # 避免除以零
-            a1_cash_pct = (a1_cash_s / a1_total_s.replace(0, np.nan) * 100).fillna(0)
-            a2_cash_pct = (a2_cash_s / a2_total_s.replace(0, np.nan) * 100).fillna(0)
+                # 避免除以零
+                a1_cash_pct = (a1_cash_s / a1_total_s.replace(0, np.nan) * 100).fillna(0)
+                a2_cash_pct = (a2_cash_s / a2_total_s.replace(0, np.nan) * 100).fillna(0)
     
-            fig_cash = go.Figure()
+                fig_cash = go.Figure()
     
-            # acc2（主線）現金比例
-            fig_cash.add_trace(go.Scatter(
-                x=a2_cash_pct.index, y=a2_cash_pct.values,
-                name="現金比例（策略+DCA）" if is_dca else "現金比例（策略）",
-                line=dict(color="#0369a1", width=2),
-                fill="tozeroy", fillcolor="rgba(3,105,161,0.08)"))
-    
-            # acc1 現金比例（DCA 模式時才顯示對比）
-            if is_dca:
+                # acc2（主線）現金比例
                 fig_cash.add_trace(go.Scatter(
-                    x=a1_cash_pct.index, y=a1_cash_pct.values,
-                    name="現金比例（純策略無DCA）",
-                    line=dict(color="#93c5fd", width=1.5, dash="dash")))
+                    x=a2_cash_pct.index, y=a2_cash_pct.values,
+                    name="現金比例（策略+DCA）" if is_dca else "現金比例（策略）",
+                    line=dict(color="#0369a1", width=2),
+                    fill="tozeroy", fillcolor="rgba(3,105,161,0.08)"))
     
-            # 加入買賣信號標記線（方便對照何時現金變化）
-            for bd in result["buy_dates"]:
-                fig_cash.add_vline(x=bd, line_color="#16a34a",
-                                   line_width=0.8, line_dash="dot", opacity=0.4)
-            for sd in result["sell_dates"]:
-                fig_cash.add_vline(x=sd, line_color="#dc2626",
-                                   line_width=0.8, line_dash="dot", opacity=0.4)
+                # acc1 現金比例（DCA 模式時才顯示對比）
+                if is_dca:
+                    fig_cash.add_trace(go.Scatter(
+                        x=a1_cash_pct.index, y=a1_cash_pct.values,
+                        name="現金比例（純策略無DCA）",
+                        line=dict(color="#93c5fd", width=1.5, dash="dash")))
     
-            fig_cash.update_layout(
-                title=dict(
-                    text="💰 現金池比例（綠虛線=買入信號 / 紅虛線=賣出信號）",
-                    font=dict(size=13, color="#0f172a")),
-                xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
-                yaxis=dict(showgrid=True, gridcolor="#e2e8f0",
-                           ticksuffix="%", range=[-2, 102]),
-                paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
-                font=CHART["font"], hovermode="x unified", height=400,
-                legend=dict(bgcolor="rgba(255,255,255,0.9)",
-                            bordercolor="#e2e8f0", borderwidth=1),
-                margin=dict(l=10, r=10, t=50, b=10))
-            st.plotly_chart(fig_cash, use_container_width=True)
+                # 加入買賣信號標記線（方便對照何時現金變化）
+                for bd in result["buy_dates"]:
+                    fig_cash.add_vline(x=bd, line_color="#16a34a",
+                                       line_width=0.8, line_dash="dot", opacity=0.4)
+                for sd in result["sell_dates"]:
+                    fig_cash.add_vline(x=sd, line_color="#dc2626",
+                                       line_width=0.8, line_dash="dot", opacity=0.4)
     
-            # 診斷摘要
-            avg_cash = float(a2_cash_pct.mean())
-            max_cash = float(a2_cash_pct.max())
-            zero_days = int((a2_cash_pct < 1).sum())
-            total_days = len(a2_cash_pct)
-            pct_zero = zero_days / total_days * 100
+                fig_cash.update_layout(
+                    title=dict(
+                        text="💰 現金池比例（綠虛線=買入信號 / 紅虛線=賣出信號）",
+                        font=dict(size=13, color="#0f172a")),
+                    xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
+                    yaxis=dict(showgrid=True, gridcolor="#e2e8f0",
+                               ticksuffix="%", range=[-2, 102]),
+                    paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+                    font=CHART["font"], hovermode="x unified", height=400,
+                    legend=dict(bgcolor="rgba(255,255,255,0.9)",
+                                bordercolor="#e2e8f0", borderwidth=1),
+                    margin=dict(l=10, r=10, t=50, b=10))
+                st.plotly_chart(fig_cash, use_container_width=True)
     
-            d1, d2, d3 = st.columns(3)
-            d1.metric("平均現金比例", f"{avg_cash:.1f}%",
-                      help="越低代表資金越積極運用，但也意味著較少備用資金")
-            d2.metric("最高現金比例", f"{max_cash:.1f}%",
-                      help="通常出現在賣出後、等待下次買入信號期間")
-            d3.metric("現金近乎 0 的天數", f"{zero_days} 天 ({pct_zero:.0f}%)",
-                      help="這段期間即使出現買入信號也無法加碼，可能代表需要增加初始資金或調整賣出策略")
+                # 診斷摘要
+                avg_cash = float(a2_cash_pct.mean())
+                max_cash = float(a2_cash_pct.max())
+                zero_days = int((a2_cash_pct < 1).sum())
+                total_days = len(a2_cash_pct)
+                pct_zero = zero_days / total_days * 100
     
-            if pct_zero > 60:
-                st.warning("⚠️ 超過 60% 的時間現金池接近 0，若此期間出現買入信號將無法執行。"
-                           "建議：增加初始資金、降低買入倉位比例、或調整賣出策略讓資金更早釋放。")
-            elif avg_cash > 40:
-                st.info("💡 平均現金比例偏高，資金有較多閒置時間。"
-                        "若希望更積極運用，可嘗試降低買入均線週期或縮短冷卻期。")
+                d1, d2, d3 = st.columns(3)
+                d1.metric("平均現金比例", f"{avg_cash:.1f}%",
+                          help="越低代表資金越積極運用，但也意味著較少備用資金")
+                d2.metric("最高現金比例", f"{max_cash:.1f}%",
+                          help="通常出現在賣出後、等待下次買入信號期間")
+                d3.metric("現金近乎 0 的天數", f"{zero_days} 天 ({pct_zero:.0f}%)",
+                          help="這段期間即使出現買入信號也無法加碼，可能代表需要增加初始資金或調整賣出策略")
     
-        with st.expander("📋 查看所有交易明細（信號交易）"):
-            trades = []
-            sell_dates_list  = result["sell_dates"]
-            sell_prices_list = result["sell_prices"]
-            for i, (bd, bp) in enumerate(zip(result["buy_dates"], result["buy_prices"])):
-                sd = sell_dates_list[i]  if i < len(sell_dates_list)  else "持倉中"
-                sp = sell_prices_list[i] if i < len(sell_prices_list) else float(c.iloc[-1])
-                trades.append({
-                    "買入日期": bd.strftime("%Y-%m-%d") if hasattr(bd, "strftime") else str(bd),
-                    "買入價格": f"${bp:,.2f}",
-                    "賣出日期": sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd),
-                    "賣出價格": f"${sp:,.2f}",
-                    "單筆報酬": f"{(sp-bp)/bp:+.2%}",
-                })
-            if trades:
-                st.dataframe(pd.DataFrame(trades), use_container_width=True, hide_index=True)
+                if pct_zero > 60:
+                    st.warning("⚠️ 超過 60% 的時間現金池接近 0，若此期間出現買入信號將無法執行。"
+                               "建議：增加初始資金、降低買入倉位比例、或調整賣出策略讓資金更早釋放。")
+                elif avg_cash > 40:
+                    st.info("💡 平均現金比例偏高，資金有較多閒置時間。"
+                            "若希望更積極運用，可嘗試降低買入均線週期或縮短冷卻期。")
+    
+            with st.expander("📋 查看所有交易明細（信號交易）"):
+                trades = []
+                sell_dates_list  = result["sell_dates"]
+                sell_prices_list = result["sell_prices"]
+                for i, (bd, bp) in enumerate(zip(result["buy_dates"], result["buy_prices"])):
+                    sd = sell_dates_list[i]  if i < len(sell_dates_list)  else "持倉中"
+                    sp = sell_prices_list[i] if i < len(sell_prices_list) else float(c.iloc[-1])
+                    trades.append({
+                        "買入日期": bd.strftime("%Y-%m-%d") if hasattr(bd, "strftime") else str(bd),
+                        "買入價格": f"${bp:,.2f}",
+                        "賣出日期": sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd),
+                        "賣出價格": f"${sp:,.2f}",
+                        "單筆報酬": f"{(sp-bp)/bp:+.2%}",
+                    })
+                if trades:
+                    st.dataframe(pd.DataFrame(trades), use_container_width=True, hide_index=True)
+                else:
+                    st.info("此策略在回測期間未產生任何信號交易。")
+    
+        st.markdown("---")
+
+        # ── 策略最佳化 ──
+        st.markdown("## 🔍 策略最佳化")
+        st.caption("對此標的進行 Grid Search，依自訂指標加權找出最佳策略，再由 Claude AI 解讀結果。")
+
+        # ── 加權設定 ──
+        with st.expander("⚖️ 自訂指標加權（合計須為 100%）", expanded=True):
+            st.caption("調整各指標的重要程度，系統會將每個指標標準化後依比重計算綜合分數。")
+            wc1, wc2, wc3, wc4 = st.columns(4)
+            w_cagr  = wc1.slider("📈 年化報酬 CAGR",    0, 100, 30, 5,
+                                 help="越高代表越重視絕對報酬率")
+            w_shar  = wc2.slider("📐 夏普比率",          0, 100, 30, 5,
+                                 help="越高代表越重視風險調整後報酬")
+            w_dd    = wc3.slider("📉 最大回撤（越小越好）", 0, 100, 25, 5,
+                                 help="越高代表越重視減少最大虧損幅度")
+            w_stab  = wc4.slider("🏔️ 穩定性（Calmar）",  0, 100, 15, 5,
+                                 help="CAGR/最大回撤，衡量每單位風險獲得的報酬是否穩定")
+            total_w = w_cagr + w_shar + w_dd + w_stab
+            if total_w == 100:
+                st.success(f"✅ 合計 {total_w}%，配置有效")
             else:
-                st.info("此策略在回測期間未產生任何信號交易。")
-    
-    st.markdown("---")
+                st.error(f"⚠️ 合計 {total_w}%，請調整至 100% 才能執行最佳化")
 
-    # ── 策略最佳化 ──
-    st.markdown("## 🔍 策略最佳化")
-    st.caption("對此標的進行 Grid Search，依自訂指標加權找出最佳策略，再由 Claude AI 解讀結果。")
+        weights = {
+            "cagr":      w_cagr  / 100,
+            "sharpe":    w_shar  / 100,
+            "max_dd":    w_dd    / 100,
+            "stability": w_stab  / 100,
+        }
 
-    # ── 加權設定 ──
-    with st.expander("⚖️ 自訂指標加權（合計須為 100%）", expanded=True):
-        st.caption("調整各指標的重要程度，系統會將每個指標標準化後依比重計算綜合分數。")
-        wc1, wc2, wc3, wc4 = st.columns(4)
-        w_cagr  = wc1.slider("📈 年化報酬 CAGR",    0, 100, 30, 5,
-                             help="越高代表越重視絕對報酬率")
-        w_shar  = wc2.slider("📐 夏普比率",          0, 100, 30, 5,
-                             help="越高代表越重視風險調整後報酬")
-        w_dd    = wc3.slider("📉 最大回撤（越小越好）", 0, 100, 25, 5,
-                             help="越高代表越重視減少最大虧損幅度")
-        w_stab  = wc4.slider("🏔️ 穩定性（Calmar）",  0, 100, 15, 5,
-                             help="CAGR/最大回撤，衡量每單位風險獲得的報酬是否穩定")
-        total_w = w_cagr + w_shar + w_dd + w_stab
-        if total_w == 100:
-            st.success(f"✅ 合計 {total_w}%，配置有效")
-        else:
-            st.error(f"⚠️ 合計 {total_w}%，請調整至 100% 才能執行最佳化")
+        opt_c1, opt_c2 = st.columns([2, 1])
+        with opt_c1:
+            api_key = st.text_input("Anthropic API Key", type="password",
+                                    placeholder="sk-ant-...",
+                                    help="用於 Claude AI 解讀。Key 不會被儲存。")
+        with opt_c2:
+            st.markdown("<br>", unsafe_allow_html=True)
+            run_opt = st.button("🚀 開始最佳化", type="secondary",
+                                disabled=(total_w != 100))
 
-    weights = {
-        "cagr":      w_cagr  / 100,
-        "sharpe":    w_shar  / 100,
-        "max_dd":    w_dd    / 100,
-        "stability": w_stab  / 100,
-    }
+        if run_opt:
+            # 從 session_state 取回測資料（避免按鈕點擊觸發重跑時變數消失）
+            _df_raw  = st.session_state.get("_opt_df_raw")
+            _inv_cfg = st.session_state.get("_opt_inv_cfg")
+            _ticker  = st.session_state.get("_opt_ticker", ticker)
 
-    opt_c1, opt_c2 = st.columns([2, 1])
-    with opt_c1:
-        api_key = st.text_input("Anthropic API Key", type="password",
-                                placeholder="sk-ant-...",
-                                help="用於 Claude AI 解讀。Key 不會被儲存。")
-    with opt_c2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        run_opt = st.button("🚀 開始最佳化", type="secondary",
-                            disabled=(total_w != 100))
+            if _df_raw is None or _inv_cfg is None:
+                st.error("⚠️ 請先點擊「執行回測分析」完成回測，再執行最佳化。")
+                st.stop()
 
-    if run_opt:
-        # 從 session_state 取回測資料（避免按鈕點擊觸發重跑時變數消失）
-        _df_raw  = st.session_state.get("_opt_df_raw")
-        _inv_cfg = st.session_state.get("_opt_inv_cfg")
-        _ticker  = st.session_state.get("_opt_ticker", ticker)
+            weight_desc = (f"CAGR {w_cagr}% ／ 夏普 {w_shar}% ／ "
+                           f"回撤 {w_dd}% ／ 穩定性 {w_stab}%")
+            with st.spinner("Grid Search 執行中，約需 10~30 秒..."):
+                opt_results = run_grid_search(_df_raw, _inv_cfg, weights)
+                if opt_results:
+                    st.session_state["_opt_results"]      = opt_results
+                    st.session_state["_opt_weight_desc"]  = weight_desc
+            if not opt_results:
+                st.error("最佳化失敗，請確認數據是否充足（建議至少 3 年）。")
+            else:
+                top10 = opt_results[:10]
+                st.markdown(f"### 📊 Top 10 策略排名")
+                st.caption(f"加權方式：{weight_desc}")
+                rows = []
+                for rank, r in enumerate(top10, 1):
+                    rows.append({
+                        "排名":      rank,
+                        "策略":      r["strategy"],
+                        "策略參數":  r["param_summary"],
+                        "倉位設定":  r.get("pos_summary", "—"),
+                        "綜合分數":  f"{r['score']:.4f}",
+                        "夏普比率":  f"{r['sharpe']:+.3f}",
+                        "CAGR":     f"{r['cagr']:+.2%}",
+                        "最大回撤":  f"{r['max_dd']:.2%}",
+                        "穩定性":   f"{r['stability']:.3f}",
+                        "交易次數":  r["n_trades"],
+                    })
+                df_opt = pd.DataFrame(rows)
+                st.dataframe(df_opt, use_container_width=True, hide_index=True)
 
-        if _df_raw is None or _inv_cfg is None:
-            st.error("⚠️ 請先點擊「執行回測分析」完成回測，再執行最佳化。")
-            st.stop()
+                # ── 前三名一鍵套用 ──
+                st.markdown("#### 🏅 前三名一鍵套用")
+                st.caption("點擊按鈕後側邊欄所有設定將自動更新，再按「執行回測分析」即可重現結果。")
+                medals = ["🥇", "🥈", "🥉"]
+                top3_cols = st.columns(3)
+                for col_idx, (col, r) in enumerate(zip(top3_cols, top10[:3])):
+                    cfg = r.get("inv_cfg", {})
+                    buy_lbl  = {"all_in":"全倉買","fixed_pct":f"{cfg.get('buy_pct',1)*100:.0f}%買","fixed_amount":f"固定${cfg.get('buy_amount',0):,.0f}買"}.get(cfg.get("buy_mode","all_in"),"全倉買")
+                    sell_lbl = {"all_out":"全倉賣","fixed_pct":f"{cfg.get('sell_pct',1)*100:.0f}%賣","fixed_amount":f"固定${cfg.get('sell_amount',0):,.0f}賣"}.get(cfg.get("sell_mode","all_out"),"全倉賣")
+                    dca_lbl  = "DCA" if cfg.get("mode") == "dca" else "一次性"
+                    with col:
+                        card = (
+                            f"**{medals[col_idx]} 第{col_idx+1}名**\n\n"
+                            f"`{r['strategy']}`\n\n"
+                            f"📐 {r['param_summary']}\n\n"
+                            f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
+                            f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}　分數 {r['score']:.3f}"
+                        )
+                        st.markdown(card)
+                        if st.button(f"套用第{col_idx+1}名設定", key=f"apply_btn_{col_idx}",
+                                     type="primary" if col_idx == 0 else "secondary",
+                                     use_container_width=True):
+                            apply_opt_result(r)
 
-        weight_desc = (f"CAGR {w_cagr}% ／ 夏普 {w_shar}% ／ "
-                       f"回撤 {w_dd}% ／ 穩定性 {w_stab}%")
-        with st.spinner("Grid Search 執行中，約需 10~30 秒..."):
-            opt_results = run_grid_search(_df_raw, _inv_cfg, weights)
-            if opt_results:
-                st.session_state["_opt_results"]      = opt_results
-                st.session_state["_opt_weight_desc"]  = weight_desc
-        if not opt_results:
-            st.error("最佳化失敗，請確認數據是否充足（建議至少 3 年）。")
-        else:
-            top10 = opt_results[:10]
-            st.markdown(f"### 📊 Top 10 策略排名")
-            st.caption(f"加權方式：{weight_desc}")
+                # ── Claude AI 解讀 ──
+                if api_key.startswith("sk-ant-"):
+                    with st.spinner("Claude AI 分析中..."):
+                        ai_analysis = call_claude_analysis(
+                            api_key, _ticker, top10, weights)
+                    st.markdown("### 🤖 Claude AI 策略解讀")
+                    st.markdown(ai_analysis)
+                elif api_key:
+                    st.warning("API Key 格式不正確，請確認是否以 sk-ant- 開頭。")
+                else:
+                    st.info("輸入 Anthropic API Key 可獲得 Claude AI 的策略解讀與建議。")
+
+        # 滑桿調整後重跑腳本時，從 session_state 恢復上次最佳化結果
+        if not run_opt and "_opt_results" in st.session_state:
+            _prev = st.session_state["_opt_results"][:10]
+            _prev_desc = st.session_state.get("_opt_weight_desc", "")
+            st.markdown(f"### 📊 Top 10 策略排名（上次結果）")
+            if _prev_desc:
+                st.caption(f"加權方式：{_prev_desc}")
             rows = []
-            for rank, r in enumerate(top10, 1):
+            for rank, r in enumerate(_prev, 1):
                 rows.append({
-                    "排名":      rank,
-                    "策略":      r["strategy"],
-                    "策略參數":  r["param_summary"],
-                    "倉位設定":  r.get("pos_summary", "—"),
-                    "綜合分數":  f"{r['score']:.4f}",
-                    "夏普比率":  f"{r['sharpe']:+.3f}",
-                    "CAGR":     f"{r['cagr']:+.2%}",
-                    "最大回撤":  f"{r['max_dd']:.2%}",
-                    "穩定性":   f"{r['stability']:.3f}",
-                    "交易次數":  r["n_trades"],
+                    "排名": rank, "策略": r["strategy"],
+                    "策略參數": r["param_summary"],
+                    "倉位設定": r.get("pos_summary", "—"),
+                    "綜合分數": f"{r['score']:.4f}",
+                    "夏普比率": f"{r['sharpe']:+.3f}",
+                    "CAGR": f"{r['cagr']:+.2%}",
+                    "最大回撤": f"{r['max_dd']:.2%}",
+                    "穩定性": f"{r['stability']:.3f}",
+                    "交易次數": r["n_trades"],
                 })
-            df_opt = pd.DataFrame(rows)
-            st.dataframe(df_opt, use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.caption("💡 調整加權比例後點擊「開始最佳化」重新計算排名。")
 
-            # ── 前三名一鍵套用 ──
-            st.markdown("#### 🏅 前三名一鍵套用")
-            st.caption("點擊按鈕後側邊欄所有設定將自動更新，再按「執行回測分析」即可重現結果。")
-            medals = ["🥇", "🥈", "🥉"]
-            top3_cols = st.columns(3)
-            for col_idx, (col, r) in enumerate(zip(top3_cols, top10[:3])):
-                cfg = r.get("inv_cfg", {})
-                buy_lbl  = {"all_in":"全倉買","fixed_pct":f"{cfg.get('buy_pct',1)*100:.0f}%買","fixed_amount":f"固定${cfg.get('buy_amount',0):,.0f}買"}.get(cfg.get("buy_mode","all_in"),"全倉買")
-                sell_lbl = {"all_out":"全倉賣","fixed_pct":f"{cfg.get('sell_pct',1)*100:.0f}%賣","fixed_amount":f"固定${cfg.get('sell_amount',0):,.0f}賣"}.get(cfg.get("sell_mode","all_out"),"全倉賣")
-                dca_lbl  = "DCA" if cfg.get("mode") == "dca" else "一次性"
-                with col:
-                    card = (
-                        f"**{medals[col_idx]} 第{col_idx+1}名**\n\n"
-                        f"`{r['strategy']}`\n\n"
-                        f"📐 {r['param_summary']}\n\n"
-                        f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
-                        f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}　分數 {r['score']:.3f}"
-                    )
-                    st.markdown(card)
-                    if st.button(f"套用第{col_idx+1}名設定", key=f"apply_btn_{col_idx}",
-                                 type="primary" if col_idx == 0 else "secondary",
-                                 use_container_width=True):
-                        apply_opt_result(r)
-
-            # ── Claude AI 解讀 ──
-            if api_key.startswith("sk-ant-"):
-                with st.spinner("Claude AI 分析中..."):
-                    ai_analysis = call_claude_analysis(
-                        api_key, _ticker, top10, weights)
-                st.markdown("### 🤖 Claude AI 策略解讀")
-                st.markdown(ai_analysis)
-            elif api_key:
-                st.warning("API Key 格式不正確，請確認是否以 sk-ant- 開頭。")
-            else:
-                st.info("輸入 Anthropic API Key 可獲得 Claude AI 的策略解讀與建議。")
-
-    # 滑桿調整後重跑腳本時，從 session_state 恢復上次最佳化結果
-    if not run_opt and "_opt_results" in st.session_state:
-        _prev = st.session_state["_opt_results"][:10]
-        _prev_desc = st.session_state.get("_opt_weight_desc", "")
-        st.markdown(f"### 📊 Top 10 策略排名（上次結果）")
-        if _prev_desc:
-            st.caption(f"加權方式：{_prev_desc}")
-        rows = []
-        for rank, r in enumerate(_prev, 1):
-            rows.append({
-                "排名": rank, "策略": r["strategy"],
-                "策略參數": r["param_summary"],
-                "倉位設定": r.get("pos_summary", "—"),
-                "綜合分數": f"{r['score']:.4f}",
-                "夏普比率": f"{r['sharpe']:+.3f}",
-                "CAGR": f"{r['cagr']:+.2%}",
-                "最大回撤": f"{r['max_dd']:.2%}",
-                "穩定性": f"{r['stability']:.3f}",
-                "交易次數": r["n_trades"],
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-        st.caption("💡 調整加權比例後點擊「開始最佳化」重新計算排名。")
-
-    st.markdown("---")
-    st.markdown(
-        "<div style='text-align:center;color:#cbd5e1;font-family:IBM Plex Mono;font-size:0.7rem;'>"
-        "數據來源: Yahoo Finance · 本工具僅供學習研究，不構成投資建議</div>",
-        unsafe_allow_html=True)
+        st.markdown("---")
+        st.markdown(
+            "<div style='text-align:center;color:#cbd5e1;font-family:IBM Plex Mono;font-size:0.7rem;'>"
+            "數據來源: Yahoo Finance · 本工具僅供學習研究，不構成投資建議</div>",
+            unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
