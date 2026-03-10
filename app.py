@@ -8,10 +8,11 @@ from engine import (
     fetch_data, compute_indicators, generate_signals,
     run_backtest, compute_benchmark, run_grid_search,
     call_claude_analysis, check_vcp, CHART,
+    plot_equity, plot_candlestick,
 )
-from charts import plot_equity, plot_candlestick
 from portfolio import render_portfolio_tab
 import pandas as pd
+from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings("ignore")
 
