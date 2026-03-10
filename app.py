@@ -199,6 +199,15 @@ st.markdown("""
     border-radius: 6px;
     color: #0f172a;
 }
+/* ── Plotly 工具列放大 ── */
+.modebar {
+    transform: scale(1.5) !important;
+    transform-origin: top right !important;
+}
+.modebar-btn svg {
+    width: 20px !important;
+    height: 20px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -623,7 +632,7 @@ def main():
                                     displayModeBar=True,
                                     modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
                                     toImageButtonOptions={"format":"png","filename":"equity_chart","scale":2},
-                                    displaylogo=False,
+                                    displaylogo=False, scrollZoom=False,
                                 ))
     
             with tab2:
@@ -637,7 +646,7 @@ def main():
                                     displayModeBar=True,
                                     modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
                                     toImageButtonOptions={"format":"png","filename":"candlestick_chart","scale":2},
-                                    displaylogo=False,
+                                    displaylogo=False, scrollZoom=False,
                                 ))
     
             with tab3:
@@ -661,7 +670,8 @@ def main():
                     name="B&H 基準",
                     line=dict(color="#94a3b8", width=1.2, dash="dot")))
                 fig_dd.update_layout(
-                    title=dict(text="📉 回撤對比", font=dict(size=14, color="#0f172a")),
+                    dragmode="pan",
+        title=dict(text="📉 回撤對比", font=dict(size=14, color="#0f172a")),
                     xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
                     yaxis=dict(showgrid=True, gridcolor="#e2e8f0", ticksuffix="%"),
                     paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc", font=CHART["font"],
@@ -671,7 +681,7 @@ def main():
                                 config=dict(locale="zh-TW", displayModeBar=True,
                                     modeBarButtonsToRemove=["select2d","lasso2d"],
                                     toImageButtonOptions={"format":"png","filename":"drawdown_chart","scale":2},
-                                    displaylogo=False))
+                                    displaylogo=False, scrollZoom=False))
     
             with tab4:
                 # ── 現金比例 = 現金池 / 總資產 ──
@@ -709,7 +719,8 @@ def main():
                                        line_width=0.8, line_dash="dot", opacity=0.4)
     
                 fig_cash.update_layout(
-                    title=dict(
+                    dragmode="pan",
+        title=dict(
                         text="💰 現金池比例（綠虛線=買入信號 / 紅虛線=賣出信號）",
                         font=dict(size=13, color="#0f172a")),
                     xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
@@ -724,7 +735,7 @@ def main():
                                 config=dict(locale="zh-TW", displayModeBar=True,
                                     modeBarButtonsToRemove=["select2d","lasso2d"],
                                     toImageButtonOptions={"format":"png","filename":"cash_chart","scale":2},
-                                    displaylogo=False))
+                                    displaylogo=False, scrollZoom=False))
     
                 # 診斷摘要
                 avg_cash = float(a2_cash_pct.mean())

@@ -809,7 +809,7 @@ def plot_equity(result: dict, bm: dict, strategy_name: str, is_dca: bool):
         yaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"],
                    tickprefix="$", tickformat=",.0f"),
         paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"],
-        font=CHART["font"], hovermode="x unified", height=430,
+        font=CHART["font"], hovermode="x unified", height=430, dragmode="pan",
         legend=dict(bgcolor="rgba(255,255,255,0.85)", bordercolor="#e2e8f0", borderwidth=1,
                     orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=10, r=10, t=65, b=10))
@@ -909,7 +909,7 @@ def plot_candlestick(df, strategy, params, buy_dates, sell_dates, buy_prices, se
                       annotation_font_color="#dc2626")
         fig.add_hline(y=0, line_color="#94a3b8", line_width=0.8, row=3, col=1)
 
-    fig.update_layout(paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"],
+    fig.update_layout(paper_bgcolor=CHART["paper_bgcolor"], plot_bgcolor=CHART["plot_bgcolor"], dragmode="pan",
         font=CHART["font"], xaxis_rangeslider_visible=False,
         legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#e2e8f0", borderwidth=1,
                     orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1),
