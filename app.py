@@ -210,18 +210,27 @@ st.markdown("""
 
 def apply_opt_result(r: dict):
     """
-    一鍵套用最佳化結果到側邊欄 widget。
-    修正：使用 _auto_run session_state flag 讓 rerun 後自動執行回測。
+    一鍵套用：只存入 _pending_apply，觸發 rerun。
+    實際寫入 widget session_state 在 _flush_pending_apply() 完成，
+    必須在所有 widget 渲染之前呼叫，才不會觸發 StreamlitAPIException。
     """
+    st.session_state["_pending_apply"] = r
+    st.session_state["_auto_run"] = True
+    st.rerun()
+
+
+def _flush_pending_apply():
+    """在任何 widget 渲染前呼叫，把 pending 資料寫入 widget key。"""
+    r = st.session_state.pop("_pending_apply", None)
+    if r is None:
+        return
     cfg      = r.get("inv_cfg", {})
     params   = r.get("params",  {})
     strategy = r.get("strategy", "")
     strats   = ["MA 交叉策略", "RSI 動能策略", "布林通道策略", "MACD 趨勢策略", "MA均線偏離策略"]
 
-    # 投入方式
     st.session_state["w_inv_mode"] = "定期定額 (DCA)" if cfg.get("mode") == "dca" else "一次性投入"
 
-    # 買入方式
     bm = cfg.get("buy_mode", "all_in")
     st.session_state["w_buy_mode"] = {"all_in": "全倉買入", "fixed_amount": "固定金額",
                                        "fixed_pct": "固定比例 %"}.get(bm, "全倉買入")
@@ -230,7 +239,6 @@ def apply_opt_result(r: dict):
     elif bm == "fixed_pct":
         st.session_state["w_buy_pct"] = int(cfg.get("buy_pct", 1.0) * 100)
 
-    # 賣出方式
     sm = cfg.get("sell_mode", "all_out")
     st.session_state["w_sell_mode"] = {"all_out": "全倉賣出", "fixed_amount": "固定金額",
                                         "fixed_pct": "固定比例 %"}.get(sm, "全倉賣出")
@@ -239,11 +247,9 @@ def apply_opt_result(r: dict):
     elif sm == "fixed_pct":
         st.session_state["w_sell_pct"] = int(cfg.get("sell_pct", 1.0) * 100)
 
-    # 策略
     if strategy in strats:
         st.session_state["w_strategy"] = strategy
 
-    # 策略參數
     for k, v in params.items():
         key = f"w_{k}"
         if k == "bb_std":
@@ -251,11 +257,10 @@ def apply_opt_result(r: dict):
         elif isinstance(v, (int, float)):
             st.session_state[key] = int(v) if isinstance(v, float) and v == int(v) else v
 
-    # ── Bug 修正：設 flag 讓 rerun 後自動執行回測，不需再手動按按鈕 ──
-    st.session_state["_auto_run"] = True
-    st.rerun()
-
 def main():
+    # ── 必須在所有 widget 渲染前執行，寫入套用設定 ──
+    _flush_pending_apply()
+
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
                 unsafe_allow_html=True)
