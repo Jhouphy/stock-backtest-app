@@ -260,6 +260,8 @@ def _flush_pending_apply():
 def main():
     # ── 必須在所有 widget 渲染前執行，寫入套用設定 ──
     _flush_pending_apply()
+    # _auto_run 在此就取出，避免之後 widget rerun 時被丟失
+    _auto_run = st.session_state.pop("_auto_run", False)
 
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
@@ -465,8 +467,8 @@ def main():
 
         st.markdown("---")
         run_btn = st.button("🚀 執行回測分析", type="primary")
-        # 套用最佳化結果後自動觸發回測
-        if st.session_state.pop("_auto_run", False):
+        # 套用最佳化結果後自動觸發回測（_auto_run 已在 main() 頂部取出）
+        if _auto_run:
             run_btn = True
 
 
