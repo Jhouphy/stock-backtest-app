@@ -752,6 +752,7 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
     sell_mode   = inv_cfg.get("sell_mode", "all_out")
     sell_amount = float(inv_cfg.get("sell_amount", 0))
     sell_pct    = float(inv_cfg.get("sell_pct", 1.0))
+    commission  = float(inv_cfg.get("commission", 0.0))   # 單邊交易成本比例
 
     dca_dates   = _build_dca_dates(df.index, dca_amount, dca_freq, mode)
     first_price = float(c.iloc[0])
@@ -789,7 +790,9 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
         elif buy_mode == "fixed_amount": use = min(buy_amount, cash)
         else:                      use = cash * buy_pct
         if use > 1.0:
-            shares += use / price
+            # 扣除買入手續費：實際買到的股數較少
+            effective_price = price * (1 + commission)
+            shares += use / effective_price
             cash   -= use
         return cash, shares
 
@@ -798,7 +801,9 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
         elif sell_mode == "fixed_amount": sell_sh = min(sell_amount / price, shares)
         else:                             sell_sh = shares * sell_pct
         if sell_sh > 1e-6:
-            cash   += sell_sh * price
+            # 扣除賣出手續費：實際收到的現金較少
+            effective_price = price * (1 - commission)
+            cash   += sell_sh * effective_price
             shares -= sell_sh
         return cash, shares
 
@@ -813,7 +818,7 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
             a1_signal_invested += dca_amount
 
             # acc2：每月 X 直接買股（DCA），另外 X 注入現金池
-            a2_shares   += dca_amount / price          # DCA 直接買
+            a2_shares   += dca_amount / (price * (1 + commission))   # DCA 直接買（含手續費）
             a2_cash     += dca_amount                  # 現金池也注入 X
             a2_invested += dca_amount * 2              # 兩筆都計入投入
             a2_dca_shares_invested += dca_amount
@@ -961,7 +966,8 @@ def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> dict:
     for i, idx in enumerate(df.index):
         price = float(c.iloc[i])
         if mode == "dca" and dca_amount > 0 and idx in dca_dates:
-            a3_shares   += (dca_amount * 2) / price   # 2X：對應 acc2 的 DCA+信號池
+            comm = float(inv_cfg.get("commission", 0.0))
+            a3_shares   += (dca_amount * 2) / (price * (1 + comm))
             a3_invested += dca_amount * 2
         a3_vals.append(a3_shares * price)
         a4_vals.append(a4_shares * price)
@@ -1161,7 +1167,15 @@ def main():
 
     with st.sidebar:
         st.markdown("### 🎯 數據設定")
-        ticker = st.text_input("股票代號", value="VOO", key="w_ticker", help="支援 VOO, QQQ, AAPL, COST 等").upper().strip()
+        ticker = st.text_input(
+            "股票代號",
+            value="VOO",
+            key="w_ticker",
+            help="美股：直接輸入代號，如 VOO、QQQ、AAPL\n台股：代號後加 .TW，如 2330.TW（台積電）、0050.TW（元大台灣50）、2317.TW（鴻海）"
+        ).upper().strip()
+        # 台股自動補 .TW 後綴提示
+        if ticker.isdigit() and not ticker.endswith(".TW"):
+            st.caption(f"💡 看起來像台股代號，請改輸入 **{ticker}.TW**")
         col_y1, col_y2 = st.columns(2)
         years_back = col_y1.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 100], index=3, key="w_years")
         end_date   = col_y2.date_input("截止日期", value=datetime.today())
@@ -1220,6 +1234,16 @@ def main():
             sell_pct = st.slider("賣出比例", 5, 100, 100, step=5,
                 format="%d%%", key="w_sell_pct") / 100
 
+        # ── 交易成本設定 ──
+        st.markdown("### 💸 交易成本")
+        commission_pct = st.select_slider(
+            "手續費 + 滑點（單邊）",
+            options=[0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0],
+            value=0.1,
+            format_func=lambda x: f"{x:.2f}%" if x > 0 else "0%（無成本）",
+            help="每次買入或賣出時扣除的摩擦成本。\n美股 ETF 建議 0.05~0.1%，台股建議 0.1~0.2%（含證交稅），頻繁交易可設更高。"
+        ) / 100   # 轉成小數
+
         # 彙整投資設定
         inv_cfg = {
             "initial":     initial_capital,
@@ -1232,6 +1256,7 @@ def main():
             "sell_mode":   {"全倉賣出": "all_out", "固定金額": "fixed_amount", "固定比例 %": "fixed_pct"}[sell_mode_label],
             "sell_amount": sell_amount,
             "sell_pct":    sell_pct,
+            "commission":  commission_pct,
         }
 
         st.markdown("---")
