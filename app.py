@@ -275,37 +275,7 @@ def main():
     # 用戶點了「立即回測」（一次性，pop 消耗）
     _do_backtest = st.session_state.pop("_do_backtest", False)
 
-    # ── 套用後底部固定提示 banner ──
-    if _show_banner:
-        st.components.v1.html("""
-        <style>
-        #apply-banner {
-            position: fixed;
-            bottom: 32px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #0369a1;
-            color: #ffffff;
-            padding: 14px 32px;
-            border-radius: 50px;
-            font-size: 15px;
-            font-family: 'Inter', sans-serif;
-            font-weight: 600;
-            box-shadow: 0 8px 32px rgba(3,105,161,0.35);
-            z-index: 999999;
-            white-space: nowrap;
-            letter-spacing: 0.02em;
-            animation: fadeIn 0.3s ease;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateX(-50%) translateY(12px); }
-            to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-        }
-        </style>
-        <div id="apply-banner">
-            ✅ 已套用最佳化設定！請點擊上方「▶ 立即執行回測」
-        </div>
-        """, height=80)
+
 
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
@@ -534,13 +504,28 @@ def main():
     with main_tab1:
         if not run_btn:
             if _show_banner:
-                # 套用最佳化設定後：持久 banner + 立即回測按鈕（捲頂已在 main() 頂部處理）
-                _b1, _b2 = st.columns([3, 1])
-                _b1.success(
-                    "✅ 最佳化設定已套用到側邊欄！確認參數後點擊右側按鈕立即執行回測。",
-                    icon="🎯"
-                )
-                if _b2.button("▶ 立即執行回測", type="primary", use_container_width=True):
+                # 套用後：訊息卡 + 正中大按鈕
+                st.markdown("""
+                <div style="
+                    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+                    border: 2px solid #0369a1;
+                    border-radius: 16px;
+                    padding: 28px 32px;
+                    text-align: center;
+                    margin: 20px 0;
+                ">
+                    <div style="font-size: 2rem; margin-bottom: 8px;">🎯</div>
+                    <div style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
+                        最佳化設定已套用至側邊欄
+                    </div>
+                    <div style="font-size: 0.85rem; color: #475569;">
+                        可在左側側邊欄確認參數，確認後點擊下方按鈕執行回測
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                # 置中大按鈕：用三欄讓按鈕居中
+                _bc1, _bc2, _bc3 = st.columns([1, 2, 1])
+                if _bc2.button("▶ 立即執行回測", type="primary", use_container_width=True):
                     st.session_state.pop("_show_apply_banner", None)
                     st.session_state["_do_backtest"] = True
                     st.rerun()
