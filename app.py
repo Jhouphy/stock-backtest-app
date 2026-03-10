@@ -405,14 +405,15 @@ def generate_signals(df: pd.DataFrame, strategy: str, params: dict) -> pd.DataFr
 def run_grid_search(df_raw: pd.DataFrame, inv_cfg: dict,
                     weights: dict | None = None) -> list:
     """
-    對所有策略窮舉參數組合，依自訂加權綜合分數排序。
-    weights 格式：{"cagr": 0.4, "sharpe": 0.3, "max_dd": 0.2, "stability": 0.1}
-    各指標先標準化到 [0,1] 再加權（max_dd 越小越好，取負後標準化）。
+    窮舉策略參數 × 倉位控制組合，依自訂加權綜合分數排序。
+    倉位維度：DCA開關 × 買入模式(全倉/50%/固定額) × 賣出模式(全倉/50%/固定額)
     """
     RISK_FREE = 0.04
     weights   = weights or {"cagr": 0.25, "sharpe": 0.25, "max_dd": 0.25, "stability": 0.25}
     results   = []
+    initial   = float(inv_cfg["initial"])
 
+    # ── 策略參數網格 ──
     param_grids = {
         "MA 交叉策略": [
             {"ma_fast": f, "ma_slow": s}
@@ -448,54 +449,102 @@ def run_grid_search(df_raw: pd.DataFrame, inv_cfg: dict,
         ],
     }
 
+    # ── 倉位控制網格 ──
+    # 買入模式：全倉 / 50%倉 / 固定金額(初始資金25%)
+    buy_grid = [
+        {"buy_mode": "all_in",       "buy_amount": initial,      "buy_pct": 1.0,  "buy_label": "全倉買"},
+        {"buy_mode": "fixed_pct",    "buy_amount": initial,      "buy_pct": 0.5,  "buy_label": "50%買"},
+        {"buy_mode": "fixed_amount", "buy_amount": initial*0.25, "buy_pct": 1.0,  "buy_label": f"固定${initial*0.25:,.0f}買"},
+    ]
+    # 賣出模式：全倉 / 50%倉 / 固定金額(初始資金25%)
+    sell_grid = [
+        {"sell_mode": "all_out",      "sell_amount": initial,      "sell_pct": 1.0, "sell_label": "全倉賣"},
+        {"sell_mode": "fixed_pct",    "sell_amount": initial,      "sell_pct": 0.5, "sell_label": "50%賣"},
+        {"sell_mode": "fixed_amount", "sell_amount": initial*0.25, "sell_pct": 1.0, "sell_label": f"固定${initial*0.25:,.0f}賣"},
+    ]
+    # DCA 開關（沿用 inv_cfg 的 dca_amount；關閉時改成 lump_sum）
+    dca_grid = [
+        {"mode": "lump_sum", "dca_label": "無DCA"},
+        {"mode": inv_cfg.get("mode", "lump_sum"),
+         "dca_label": "有DCA" if inv_cfg.get("mode") == "dca" else "無DCA"},
+    ]
+    # 去重（若 inv_cfg 本來就是 lump_sum，dca_grid 只有一種）
+    seen_modes = set()
+    dca_grid_dedup = []
+    for d in dca_grid:
+        if d["mode"] not in seen_modes:
+            dca_grid_dedup.append(d); seen_modes.add(d["mode"])
+
     for strategy, grid in param_grids.items():
         for params in grid:
             try:
                 df_ind = compute_indicators(df_raw, strategy, params)
                 if df_ind.empty or len(df_ind) < 60:
                     continue
-                df_sig  = generate_signals(df_ind, strategy, params)
-                res     = run_backtest(df_sig, inv_cfg)
-
-                ps      = res["acc1_series"]
-                daily_r = ps.pct_change().dropna()
-                if len(daily_r) < 20:
-                    continue
-                ann_vol   = float(daily_r.std() * (252 ** 0.5))
-                cagr      = res["acc1_cagr"]
-                sharpe    = (cagr - RISK_FREE) / ann_vol if ann_vol > 0.001 else -99
-                max_dd    = res["acc1_drawdown"]   # 負值
-                n_trades  = len(res["buy_dates"])
-                years_bt  = max((df_sig.index[-1] - df_sig.index[0]).days / 365.25, 0.1)
-                # stability：用「calmar ratio」代理穩定性（CAGR / |最大回撤|）
-                stability = cagr / abs(max_dd) if abs(max_dd) > 0.001 else 0
-
-                # 摘要字串
-                if strategy == "MA 交叉策略":
-                    summary = f"MA{params['ma_fast']}/MA{params['ma_slow']}"
-                elif strategy == "RSI 動能策略":
-                    summary = f"RSI{params['rsi_period']} 買<{params['rsi_buy']} 賣>{params['rsi_sell']}"
-                elif strategy == "布林通道策略":
-                    summary = f"BB{params['bb_period']} ±{params['bb_std']}σ"
-                elif strategy == "MACD 趨勢策略":
-                    summary = f"MACD {params['macd_fast']}/{params['macd_slow']}/{params['macd_signal']}"
-                else:
-                    summary = (f"買MA{params['dev_buy_period']} "
-                               f"賣MA{params['dev_sell_period']}+{params['dev_sell_pct']:.0f}%")
-
-                results.append({
-                    "strategy":      strategy,
-                    "params":        params,
-                    "param_summary": summary,
-                    "sharpe":        round(sharpe, 4),
-                    "cagr":          cagr,
-                    "max_dd":        max_dd,
-                    "stability":     round(stability, 4),
-                    "n_trades":      n_trades,
-                    "ann_vol":       round(ann_vol, 4),
-                })
+                df_sig = generate_signals(df_ind, strategy, params)
             except Exception:
                 continue
+
+            for dca_cfg in dca_grid_dedup:
+                for b_cfg in buy_grid:
+                    for s_cfg in sell_grid:
+                        try:
+                            # 組合 inv_cfg
+                            cfg = {**inv_cfg,
+                                   "mode":        dca_cfg["mode"],
+                                   "buy_mode":    b_cfg["buy_mode"],
+                                   "buy_amount":  b_cfg["buy_amount"],
+                                   "buy_pct":     b_cfg["buy_pct"],
+                                   "sell_mode":   s_cfg["sell_mode"],
+                                   "sell_amount": s_cfg["sell_amount"],
+                                   "sell_pct":    s_cfg["sell_pct"],
+                            }
+                            res = run_backtest(df_sig, cfg)
+
+                            ps      = res["acc1_series"]
+                            daily_r = ps.pct_change().dropna()
+                            if len(daily_r) < 20:
+                                continue
+                            ann_vol   = float(daily_r.std() * (252 ** 0.5))
+                            cagr      = res["acc1_cagr"]
+                            sharpe    = (cagr - RISK_FREE) / ann_vol if ann_vol > 0.001 else -99
+                            max_dd    = res["acc1_drawdown"]
+                            n_trades  = len(res["buy_dates"])
+                            stability = cagr / abs(max_dd) if abs(max_dd) > 0.001 else 0
+
+                            # 策略摘要
+                            if strategy == "MA 交叉策略":
+                                s_sum = f"MA{params['ma_fast']}/MA{params['ma_slow']}"
+                            elif strategy == "RSI 動能策略":
+                                s_sum = f"RSI{params['rsi_period']} 買<{params['rsi_buy']} 賣>{params['rsi_sell']}"
+                            elif strategy == "布林通道策略":
+                                s_sum = f"BB{params['bb_period']} ±{params['bb_std']}σ"
+                            elif strategy == "MACD 趨勢策略":
+                                s_sum = f"MACD {params['macd_fast']}/{params['macd_slow']}/{params['macd_signal']}"
+                            else:
+                                s_sum = (f"買MA{params['dev_buy_period']} "
+                                         f"賣MA{params['dev_sell_period']}+{params['dev_sell_pct']:.0f}%")
+
+                            # 倉位摘要（可直接複製到 App 設定）
+                            pos_sum  = f"{dca_cfg['dca_label']} ／ {b_cfg['buy_label']} ／ {s_cfg['sell_label']}"
+                            full_sum = f"{s_sum}｜{pos_sum}"
+
+                            results.append({
+                                "strategy":      strategy,
+                                "params":        params,
+                                "inv_cfg":       cfg,          # 完整設定，可直接套用
+                                "param_summary": s_sum,
+                                "pos_summary":   pos_sum,
+                                "full_summary":  full_sum,
+                                "sharpe":        round(sharpe, 4),
+                                "cagr":          cagr,
+                                "max_dd":        max_dd,
+                                "stability":     round(stability, 4),
+                                "n_trades":      n_trades,
+                                "ann_vol":       round(ann_vol, 4),
+                            })
+                        except Exception:
+                            continue
 
     if not results:
         return []
@@ -1545,7 +1594,8 @@ def main():
                 rows.append({
                     "排名":      rank,
                     "策略":      r["strategy"],
-                    "參數摘要":  r["param_summary"],
+                    "策略參數":  r["param_summary"],
+                    "倉位設定":  r.get("pos_summary", "—"),
                     "綜合分數":  f"{r['score']:.4f}",
                     "夏普比率":  f"{r['sharpe']:+.3f}",
                     "CAGR":     f"{r['cagr']:+.2%}",
@@ -1555,6 +1605,21 @@ def main():
                 })
             df_opt = pd.DataFrame(rows)
             st.dataframe(df_opt, use_container_width=True, hide_index=True)
+
+            # ── 第一名詳細設定（可直接對照 App 側邊欄複製）──
+            best = top10[0]
+            best_cfg = best.get("inv_cfg", {})
+            with st.expander("🏆 第一名完整設定（對照側邊欄複製）", expanded=True):
+                bc1, bc2, bc3 = st.columns(3)
+                bc1.markdown(f"**📊 策略**\n\n{best['strategy']}")
+                bc1.markdown(f"**⚙️ 策略參數**\n\n{best['param_summary']}")
+                bc2.markdown(f"**💰 投入方式**\n\n{'DCA 定投' if best_cfg.get('mode')=='dca' else '一次性買入'}")
+                buy_label = {"all_in":"全倉買入","fixed_pct":f"固定比例 {best_cfg.get('buy_pct',1)*100:.0f}%","fixed_amount":f"固定金額 ${best_cfg.get('buy_amount',0):,.0f}"}.get(best_cfg.get("buy_mode","all_in"),"全倉買入")
+                sell_label = {"all_out":"全倉賣出","fixed_pct":f"固定比例 {best_cfg.get('sell_pct',1)*100:.0f}%","fixed_amount":f"固定金額 ${best_cfg.get('sell_amount',0):,.0f}"}.get(best_cfg.get("sell_mode","all_out"),"全倉賣出")
+                bc2.markdown(f"**📥 買入方式**\n\n{buy_label}")
+                bc3.markdown(f"**📤 賣出方式**\n\n{sell_label}")
+                bc3.markdown(f"**📈 CAGR**\n\n{best['cagr']:+.2%}　**回撤** {best['max_dd']:.2%}")
+                st.caption("💡 對照左側側邊欄，將以上設定輸入後點擊「執行回測分析」即可重現此結果。")
 
             # ── Claude AI 解讀 ──
             if api_key.startswith("sk-ant-"):
@@ -1579,7 +1644,8 @@ def main():
         for rank, r in enumerate(_prev, 1):
             rows.append({
                 "排名": rank, "策略": r["strategy"],
-                "參數摘要": r["param_summary"],
+                "策略參數": r["param_summary"],
+                "倉位設定": r.get("pos_summary", "—"),
                 "綜合分數": f"{r['score']:.4f}",
                 "夏普比率": f"{r['sharpe']:+.3f}",
                 "CAGR": f"{r['cagr']:+.2%}",
