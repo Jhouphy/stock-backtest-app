@@ -295,9 +295,21 @@ def main():
             start_dt = end_dt.replace(year=end_dt.year - years_back, day=28)
         start_date = start_dt.strftime("%Y-%m-%d")
         end_str    = end_date.strftime("%Y-%m-%d")
-        # ── 初始資金 ──
-        initial_capital = st.number_input("初始資金 (USD)", min_value=0,
-            max_value=10_000_000, value=100_000, step=10_000, format="%d", key="w_initial")
+        # ── 初始資金 + 貨幣快選 ──
+        _cap_c1, _cap_c2 = st.columns([3, 2])
+        with _cap_c2:
+            st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
+            _currency = st.radio("計價貨幣", ["USD", "TWD"], horizontal=True,
+                key="w_display_currency",
+                help="切換後自動調整初始資金建議金額與符號，不影響回測邏輯（回測以股票原始貨幣計算）。")
+        _usd_mode = (_currency == "USD")
+        _symbol   = "$" if _usd_mode else "NT$"
+        _default  = 100_000 if _usd_mode else 3_000_000
+        _step     = 10_000  if _usd_mode else 100_000
+        with _cap_c1:
+            initial_capital = st.number_input(f"初始資金 ({_currency})", min_value=0,
+                max_value=(10_000_000 if _usd_mode else 300_000_000),
+                value=_default, step=_step, format="%d", key="w_initial")
 
         # ── 投入方式 ──
         st.markdown("### 💰 投入方式")
@@ -315,7 +327,7 @@ def main():
                 help="1次=每月初投入一次；2次=每兩週投入一次；4次=每週投入一次")
             # 估算總投入
             total_est = initial_capital + dca_amount * dca_freq * 12 * years_back
-            st.info(f"💡 預估總投入：${total_est:,.0f}　（初始 ${initial_capital:,} + ${dca_amount:,} × {dca_freq}次/月 × {years_back}年）")
+            st.info(f"💡 預估總投入：{_symbol}{total_est:,.0f}　（初始 {_symbol}{initial_capital:,} + {_symbol}{dca_amount:,} × {dca_freq}次/月 × {years_back}年）")
 
         # ── 每次買入倉位 ──
         st.markdown("### 🎚️ 倉位控制")
@@ -486,16 +498,28 @@ def main():
 
     with main_tab1:
         if not run_btn:
-            st.info("👈 請在左側設定參數後，點擊「執行回測分析」開始分析。", icon="💡")
-            col1, col2, col3, col4 = st.columns(4)
-            col1.markdown("**MA 交叉策略**\n\n快慢均線黃金/死亡交叉，捕捉趨勢轉換。")
-            col2.markdown("**RSI 動能策略**\n\n超賣買入、超買賣出，適合震盪行情。")
-            col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
-            col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
+            if _applied:
+                # 剛套用最佳化設定：顯示確認橫幅 + 一鍵回測按鈕
+                st.components.v1.html(
+                    "<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
+                    height=0,
+                )
+                _b1, _b2 = st.columns([3, 1])
+                _b1.success(
+                    "✅ 最佳化設定已套用到側邊欄！確認參數後點擊右側按鈕立即執行回測。",
+                    icon="🎯"
+                )
+                if _b2.button("▶ 立即執行回測", type="primary", use_container_width=True):
+                    st.session_state["_do_backtest"] = True
+                    st.rerun()
+            else:
+                st.info("👈 請在左側設定參數後，點擊「執行回測分析」開始分析。", icon="💡")
+                col1, col2, col3, col4 = st.columns(4)
+                col1.markdown("**MA 交叉策略**\n\n快慢均線黃金/死亡交叉，捕捉趨勢轉換。")
+                col2.markdown("**RSI 動能策略**\n\n超賣買入、超買賣出，適合震盪行情。")
+                col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
+                col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
         else:
-            if _auto_run:
-                st.success("✅ 已套用最佳化設定，正在執行回測...", icon="🚀")
-
             with st.spinner(f"正在下載 {ticker} 數據..."):
                 df_raw = fetch_data(ticker, start_date, end_str)
     
@@ -593,14 +617,28 @@ def main():
     
             with tab1:
                 st.plotly_chart(plot_equity(result, bm, strategy, is_dca),
-                                use_container_width=True)
+                                use_container_width=True,
+                                config=dict(
+                                    locale="zh-TW",
+                                    displayModeBar=True,
+                                    modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
+                                    toImageButtonOptions={"format":"png","filename":"equity_chart","scale":2},
+                                    displaylogo=False,
+                                ))
     
             with tab2:
                 st.plotly_chart(plot_candlestick(df, strategy, params,
                     result["buy_dates"],     result["sell_dates"],
                     result["buy_prices"],    result["sell_prices"],
                     result["dca_buy_dates"], result["dca_buy_prices"]),
-                    use_container_width=True)
+                    use_container_width=True,
+                                config=dict(
+                                    locale="zh-TW",
+                                    displayModeBar=True,
+                                    modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
+                                    toImageButtonOptions={"format":"png","filename":"candlestick_chart","scale":2},
+                                    displaylogo=False,
+                                ))
     
             with tab3:
                 fig_dd = go.Figure()
@@ -629,7 +667,11 @@ def main():
                     paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc", font=CHART["font"],
                     legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#e2e8f0", borderwidth=1),
                     hovermode="x unified", height=380, margin=dict(l=10,r=10,t=50,b=10))
-                st.plotly_chart(fig_dd, use_container_width=True)
+                st.plotly_chart(fig_dd, use_container_width=True,
+                                config=dict(locale="zh-TW", displayModeBar=True,
+                                    modeBarButtonsToRemove=["select2d","lasso2d"],
+                                    toImageButtonOptions={"format":"png","filename":"drawdown_chart","scale":2},
+                                    displaylogo=False))
     
             with tab4:
                 # ── 現金比例 = 現金池 / 總資產 ──
@@ -678,7 +720,11 @@ def main():
                     legend=dict(bgcolor="rgba(255,255,255,0.9)",
                                 bordercolor="#e2e8f0", borderwidth=1),
                     margin=dict(l=10, r=10, t=50, b=10))
-                st.plotly_chart(fig_cash, use_container_width=True)
+                st.plotly_chart(fig_cash, use_container_width=True,
+                                config=dict(locale="zh-TW", displayModeBar=True,
+                                    modeBarButtonsToRemove=["select2d","lasso2d"],
+                                    toImageButtonOptions={"format":"png","filename":"cash_chart","scale":2},
+                                    displaylogo=False))
     
                 # 診斷摘要
                 avg_cash = float(a2_cash_pct.mean())
