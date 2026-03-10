@@ -225,7 +225,6 @@ def apply_opt_result(r: dict):
     """
     st.session_state["_pending_apply"] = r
     st.session_state["_show_apply_banner"] = True
-    st.session_state["_needs_scroll_to_top"] = True
     st.rerun()
 
 
@@ -276,17 +275,37 @@ def main():
     # 用戶點了「立即回測」（一次性，pop 消耗）
     _do_backtest = st.session_state.pop("_do_backtest", False)
 
-    # ── Scroll to top（Gemini 建議的正確實作）──
-    # 讀完立刻重設 False，確保只捲一次，不影響後續 rerun
-    if st.session_state.get("_needs_scroll_to_top"):
-        st.session_state["_needs_scroll_to_top"] = False
-        st.components.v1.html(
-            """<script>
-                // 確保父視窗（非 iframe）執行
-                window.parent.scrollTo({ top: 0, behavior: 'smooth' });
-            </script>""",
-            height=0,
-        )
+    # ── 套用後底部固定提示 banner ──
+    if _show_banner:
+        st.components.v1.html("""
+        <style>
+        #apply-banner {
+            position: fixed;
+            bottom: 32px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #0369a1;
+            color: #ffffff;
+            padding: 14px 32px;
+            border-radius: 50px;
+            font-size: 15px;
+            font-family: 'Inter', sans-serif;
+            font-weight: 600;
+            box-shadow: 0 8px 32px rgba(3,105,161,0.35);
+            z-index: 999999;
+            white-space: nowrap;
+            letter-spacing: 0.02em;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(-50%) translateY(12px); }
+            to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        </style>
+        <div id="apply-banner">
+            ✅ 已套用最佳化設定！請點擊上方「▶ 立即執行回測」
+        </div>
+        """, height=80)
 
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
@@ -890,7 +909,6 @@ def main():
                                  key=f"apply_btn_{col_idx}",
                                  type="primary" if col_idx == 0 else "secondary",
                                  use_container_width=True):
-                        st.toast(f"✅ 已套用第 {col_idx+1} 名策略！請查看頂部設定。", icon="📈")
                         apply_opt_result(r)
 
             # ── Claude AI（只在剛跑完時）──
