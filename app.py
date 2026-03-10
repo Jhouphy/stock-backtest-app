@@ -643,6 +643,52 @@ def call_claude_analysis(api_key: str, ticker: str, top_results: list,
         return f"❌ Claude API 呼叫失敗：{e}"
 
 
+def apply_opt_result(r: dict):
+    """
+    將最佳化結果一鍵寫入側邊欄 widget 的 session_state，
+    再觸發 rerun 讓所有 widget 顯示新值。
+    """
+    cfg     = r.get("inv_cfg", {})
+    params  = r.get("params",  {})
+    strategy= r.get("strategy", "")
+    strats  = ["MA 交叉策略", "RSI 動能策略", "布林通道策略", "MACD 趨勢策略", "MA均線偏離策略"]
+
+    # 投入方式
+    st.session_state["w_inv_mode"] = "定期定額 (DCA)" if cfg.get("mode") == "dca" else "一次性投入"
+
+    # 買入方式
+    bm = cfg.get("buy_mode", "all_in")
+    st.session_state["w_buy_mode"] = {"all_in": "全倉買入", "fixed_amount": "固定金額", "fixed_pct": "固定比例 %"}.get(bm, "全倉買入")
+    if bm == "fixed_amount":
+        st.session_state["w_buy_amount"] = int(cfg.get("buy_amount", 10000))
+    elif bm == "fixed_pct":
+        st.session_state["w_buy_pct"] = int(cfg.get("buy_pct", 1.0) * 100)
+
+    # 賣出方式
+    sm = cfg.get("sell_mode", "all_out")
+    st.session_state["w_sell_mode"] = {"all_out": "全倉賣出", "fixed_amount": "固定金額", "fixed_pct": "固定比例 %"}.get(sm, "全倉賣出")
+    if sm == "fixed_amount":
+        st.session_state["w_sell_amount"] = int(cfg.get("sell_amount", 10000))
+    elif sm == "fixed_pct":
+        st.session_state["w_sell_pct"] = int(cfg.get("sell_pct", 1.0) * 100)
+
+    # 策略選擇
+    if strategy in strats:
+        st.session_state["w_strategy"] = strategy
+
+    # 策略參數
+    for k, v in params.items():
+        key = f"w_{k}"
+        if k == "bb_std":
+            st.session_state[key] = float(v)
+        elif isinstance(v, float) and k not in ("dev_buy_pct",):
+            st.session_state[key] = float(v)
+        elif isinstance(v, (int, float)):
+            st.session_state[key] = int(v)
+
+    st.rerun()
+
+
 def check_vcp(df: pd.DataFrame) -> dict:
     """VCP 四條件檢查"""
     c = df["Close"].squeeze()
@@ -1115,9 +1161,9 @@ def main():
 
     with st.sidebar:
         st.markdown("### 🎯 數據設定")
-        ticker = st.text_input("股票代號", value="VOO", help="支援 VOO, QQQ, AAPL, COST 等").upper().strip()
+        ticker = st.text_input("股票代號", value="VOO", key="w_ticker", help="支援 VOO, QQQ, AAPL, COST 等").upper().strip()
         col_y1, col_y2 = st.columns(2)
-        years_back = col_y1.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 100], index=3)
+        years_back = col_y1.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 100], index=3, key="w_years")
         end_date   = col_y2.date_input("截止日期", value=datetime.today())
         end_dt     = datetime.combine(end_date, datetime.min.time())
         try:
@@ -1128,12 +1174,12 @@ def main():
         end_str    = end_date.strftime("%Y-%m-%d")
         # ── 初始資金 ──
         initial_capital = st.number_input("初始資金 (USD)", min_value=0,
-            max_value=10_000_000, value=100_000, step=10_000, format="%d")
+            max_value=10_000_000, value=100_000, step=10_000, format="%d", key="w_initial")
 
         # ── 投入方式 ──
         st.markdown("### 💰 投入方式")
         inv_mode = st.radio("選擇投入模式", ["一次性投入", "定期定額 (DCA)"],
-            horizontal=True,
+            horizontal=True, key="w_inv_mode",
             help="一次性：回測起始日全額買入。定期定額：每月固定日注入資金，模擬長期積累。")
 
         dca_amount, dca_freq = 0, 1
@@ -1152,25 +1198,27 @@ def main():
         st.markdown("### 🎚️ 倉位控制")
         buy_mode_label = st.selectbox("買入方式",
             ["全倉買入", "固定金額", "固定比例 %"],
+            key="w_buy_mode",
             help="每次觸發買入信號時，要用多少資金進場。")
         buy_amount, buy_pct = initial_capital, 1.0
         if buy_mode_label == "固定金額":
             buy_amount = st.number_input("每次買入金額 ($)", min_value=100,
-                max_value=10_000_000, value=min(10_000, initial_capital), step=1_000, format="%d")
+                max_value=10_000_000, value=min(10_000, initial_capital), step=1_000, format="%d", key="w_buy_amount")
         elif buy_mode_label == "固定比例 %":
             buy_pct = st.slider("買入比例", 5, 100, 100, step=5,
-                format="%d%%", help="佔當前可用資金的百分比") / 100
+                format="%d%%", key="w_buy_pct", help="佔當前可用資金的百分比") / 100
 
         sell_mode_label = st.selectbox("賣出方式",
             ["全倉賣出", "固定金額", "固定比例 %"],
+            key="w_sell_mode",
             help="每次觸發賣出信號時，要賣出多少持倉。")
         sell_amount, sell_pct = 0, 1.0
         if sell_mode_label == "固定金額":
             sell_amount = st.number_input("每次賣出金額 ($)", min_value=100,
-                max_value=10_000_000, value=10_000, step=1_000, format="%d")
+                max_value=10_000_000, value=10_000, step=1_000, format="%d", key="w_sell_amount")
         elif sell_mode_label == "固定比例 %":
             sell_pct = st.slider("賣出比例", 5, 100, 100, step=5,
-                format="%d%%") / 100
+                format="%d%%", key="w_sell_pct") / 100
 
         # 彙整投資設定
         inv_cfg = {
@@ -1210,6 +1258,7 @@ def main():
         }
         strategy = st.selectbox("選擇回測策略",
             list(STRATEGY_HELP.keys()),
+            key="w_strategy",
             help=STRATEGY_HELP.get("MA 交叉策略"))
         with st.expander("📖 策略說明", expanded=False):
             st.caption(STRATEGY_HELP[strategy])
@@ -1217,19 +1266,19 @@ def main():
         params = {}
         with st.expander("⚙️ 策略參數設定", expanded=True):
             if strategy == "MA 交叉策略":
-                params["ma_fast"] = st.slider("快線 MA", 5, 100, 50)
-                params["ma_slow"] = st.slider("慢線 MA", 50, 300, 200)
+                params["ma_fast"] = st.slider("快線 MA", 5, 100, 50, key="w_ma_fast")
+                params["ma_slow"] = st.slider("慢線 MA", 50, 300, 200, key="w_ma_slow")
             elif strategy == "RSI 動能策略":
-                params["rsi_period"] = st.slider("RSI 週期", 5, 30, 14)
-                params["rsi_buy"]    = st.slider("超賣門檻（買入）", 10, 40, 30)
-                params["rsi_sell"]   = st.slider("超買門檻（賣出）", 60, 90, 70)
+                params["rsi_period"] = st.slider("RSI 週期", 5, 30, 14, key="w_rsi_period")
+                params["rsi_buy"]    = st.slider("超賣門檻（買入）", 10, 40, 30, key="w_rsi_buy")
+                params["rsi_sell"]   = st.slider("超買門檻（賣出）", 60, 90, 70, key="w_rsi_sell")
             elif strategy == "布林通道策略":
-                params["bb_period"] = st.slider("布林週期", 5, 50, 20)
-                params["bb_std"]    = st.select_slider("標準差倍數", [1.5, 2.0, 2.5, 3.0], value=2.0)
+                params["bb_period"] = st.slider("布林週期", 5, 50, 20, key="w_bb_period")
+                params["bb_std"]    = st.select_slider("標準差倍數", [1.5, 2.0, 2.5, 3.0], value=2.0, key="w_bb_std")
             elif strategy == "MACD 趨勢策略":
-                params["macd_fast"]   = st.slider("MACD 快線", 5, 20, 12)
-                params["macd_slow"]   = st.slider("MACD 慢線", 15, 50, 26)
-                params["macd_signal"] = st.slider("MACD 信號線", 5, 20, 9)
+                params["macd_fast"]   = st.slider("MACD 快線", 5, 20, 12, key="w_macd_fast")
+                params["macd_slow"]   = st.slider("MACD 慢線", 15, 50, 26, key="w_macd_slow")
+                params["macd_signal"] = st.slider("MACD 信號線", 5, 20, 9, key="w_macd_signal")
             elif strategy == "MA均線偏離策略":
                 st.markdown("**📉 買入條件**")
                 bc1, bc2, bc3 = st.columns(3)
@@ -1606,20 +1655,29 @@ def main():
             df_opt = pd.DataFrame(rows)
             st.dataframe(df_opt, use_container_width=True, hide_index=True)
 
-            # ── 第一名詳細設定（可直接對照 App 側邊欄複製）──
-            best = top10[0]
-            best_cfg = best.get("inv_cfg", {})
-            with st.expander("🏆 第一名完整設定（對照側邊欄複製）", expanded=True):
-                bc1, bc2, bc3 = st.columns(3)
-                bc1.markdown(f"**📊 策略**\n\n{best['strategy']}")
-                bc1.markdown(f"**⚙️ 策略參數**\n\n{best['param_summary']}")
-                bc2.markdown(f"**💰 投入方式**\n\n{'DCA 定投' if best_cfg.get('mode')=='dca' else '一次性買入'}")
-                buy_label = {"all_in":"全倉買入","fixed_pct":f"固定比例 {best_cfg.get('buy_pct',1)*100:.0f}%","fixed_amount":f"固定金額 ${best_cfg.get('buy_amount',0):,.0f}"}.get(best_cfg.get("buy_mode","all_in"),"全倉買入")
-                sell_label = {"all_out":"全倉賣出","fixed_pct":f"固定比例 {best_cfg.get('sell_pct',1)*100:.0f}%","fixed_amount":f"固定金額 ${best_cfg.get('sell_amount',0):,.0f}"}.get(best_cfg.get("sell_mode","all_out"),"全倉賣出")
-                bc2.markdown(f"**📥 買入方式**\n\n{buy_label}")
-                bc3.markdown(f"**📤 賣出方式**\n\n{sell_label}")
-                bc3.markdown(f"**📈 CAGR**\n\n{best['cagr']:+.2%}　**回撤** {best['max_dd']:.2%}")
-                st.caption("💡 對照左側側邊欄，將以上設定輸入後點擊「執行回測分析」即可重現此結果。")
+            # ── 前三名一鍵套用 ──
+            st.markdown("#### 🏅 前三名一鍵套用")
+            st.caption("點擊按鈕後側邊欄所有設定將自動更新，再按「執行回測分析」即可重現結果。")
+            medals = ["🥇", "🥈", "🥉"]
+            top3_cols = st.columns(3)
+            for col_idx, (col, r) in enumerate(zip(top3_cols, top10[:3])):
+                cfg = r.get("inv_cfg", {})
+                buy_lbl  = {"all_in":"全倉買","fixed_pct":f"{cfg.get('buy_pct',1)*100:.0f}%買","fixed_amount":f"固定${cfg.get('buy_amount',0):,.0f}買"}.get(cfg.get("buy_mode","all_in"),"全倉買")
+                sell_lbl = {"all_out":"全倉賣","fixed_pct":f"{cfg.get('sell_pct',1)*100:.0f}%賣","fixed_amount":f"固定${cfg.get('sell_amount',0):,.0f}賣"}.get(cfg.get("sell_mode","all_out"),"全倉賣")
+                dca_lbl  = "DCA" if cfg.get("mode") == "dca" else "一次性"
+                with col:
+                    card = (
+                        f"**{medals[col_idx]} 第{col_idx+1}名**\n\n"
+                        f"`{r['strategy']}`\n\n"
+                        f"📐 {r['param_summary']}\n\n"
+                        f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
+                        f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}　分數 {r['score']:.3f}"
+                    )
+                    st.markdown(card)
+                    if st.button(f"套用第{col_idx+1}名設定", key=f"apply_btn_{col_idx}",
+                                 type="primary" if col_idx == 0 else "secondary",
+                                 use_container_width=True):
+                        apply_opt_result(r)
 
             # ── Claude AI 解讀 ──
             if api_key.startswith("sk-ant-"):
