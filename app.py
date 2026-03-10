@@ -225,6 +225,7 @@ def apply_opt_result(r: dict):
     """
     st.session_state["_pending_apply"] = r
     st.session_state["_show_apply_banner"] = True
+    st.session_state["_needs_scroll_to_top"] = True
     st.rerun()
 
 
@@ -275,10 +276,15 @@ def main():
     # 用戶點了「立即回測」（一次性，pop 消耗）
     _do_backtest = st.session_state.pop("_do_backtest", False)
 
-    # 剛套用最佳化設定時，立即捲回頂部（在任何 UI 渲染前執行）
-    if _show_banner:
+    # ── Scroll to top（Gemini 建議的正確實作）──
+    # 讀完立刻重設 False，確保只捲一次，不影響後續 rerun
+    if st.session_state.get("_needs_scroll_to_top"):
+        st.session_state["_needs_scroll_to_top"] = False
         st.components.v1.html(
-            "<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
+            """<script>
+                // 確保父視窗（非 iframe）執行
+                window.parent.scrollTo({ top: 0, behavior: 'smooth' });
+            </script>""",
             height=0,
         )
 
@@ -884,6 +890,7 @@ def main():
                                  key=f"apply_btn_{col_idx}",
                                  type="primary" if col_idx == 0 else "secondary",
                                  use_container_width=True):
+                        st.toast(f"✅ 已套用第 {col_idx+1} 名策略！請查看頂部設定。", icon="📈")
                         apply_opt_result(r)
 
             # ── Claude AI（只在剛跑完時）──
