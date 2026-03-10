@@ -260,14 +260,9 @@ def _flush_pending_apply():
 def main():
     # ── 必須在所有 widget 渲染前執行，寫入套用設定 ──
     _flush_pending_apply()
-    # _auto_run 在此就取出，避免之後 widget rerun 時被丟失
-    _auto_run = st.session_state.pop("_auto_run", False)
-    if _auto_run:
-        # 滾回頁面頂部，讓使用者看到回測執行過程
-        st.components.v1.html(
-            "<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
-            height=0,
-        )
+    # 在任何 widget 渲染前取出所有 flag，避免 widget reconciliation rerun 時遺失
+    _applied     = st.session_state.pop("_auto_run", False)     # 剛套用最佳化設定
+    _do_backtest = st.session_state.pop("_do_backtest", False)  # 使用者點擊「立即回測」
 
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
@@ -485,8 +480,8 @@ def main():
 
         st.markdown("---")
         run_btn = st.button("🚀 執行回測分析", type="primary")
-        # 套用最佳化結果後自動觸發回測（_auto_run 已在 main() 頂部取出）
-        if _auto_run:
+        # 使用者點「立即回測」按鈕時自動觸發
+        if _do_backtest:
             run_btn = True
 
 
