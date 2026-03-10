@@ -402,6 +402,198 @@ def generate_signals(df: pd.DataFrame, strategy: str, params: dict) -> pd.DataFr
     return df
 
 
+def run_grid_search(df_raw: pd.DataFrame, inv_cfg: dict,
+                    weights: dict | None = None) -> list:
+    """
+    對所有策略窮舉參數組合，依自訂加權綜合分數排序。
+    weights 格式：{"cagr": 0.4, "sharpe": 0.3, "max_dd": 0.2, "stability": 0.1}
+    各指標先標準化到 [0,1] 再加權（max_dd 越小越好，取負後標準化）。
+    """
+    RISK_FREE = 0.04
+    weights   = weights or {"cagr": 0.25, "sharpe": 0.25, "max_dd": 0.25, "stability": 0.25}
+    results   = []
+
+    param_grids = {
+        "MA 交叉策略": [
+            {"ma_fast": f, "ma_slow": s}
+            for f in [10, 20, 50]
+            for s in [100, 150, 200]
+            if f < s
+        ],
+        "RSI 動能策略": [
+            {"rsi_period": p, "rsi_buy": b, "rsi_sell": sl}
+            for p  in [10, 14]
+            for b  in [25, 30]
+            for sl in [65, 70]
+        ],
+        "布林通道策略": [
+            {"bb_period": p, "bb_std": s}
+            for p in [10, 20]
+            for s in [1.5, 2.0, 2.5]
+        ],
+        "MACD 趨勢策略": [
+            {"macd_fast": f, "macd_slow": s, "macd_signal": sig}
+            for f   in [8, 12]
+            for s   in [21, 26]
+            for sig in [7, 9]
+            if f < s
+        ],
+        "MA均線偏離策略": [
+            {"dev_buy_period": b, "dev_buy_pct": 0.0,
+             "dev_sell_period": sl, "dev_sell_pct": pct,
+             "dev_buy_cooldown": 20, "dev_sell_cooldown": 20}
+            for b   in [20, 30, 60]
+            for sl  in [5, 10]
+            for pct in [5.0, 10.0, 15.0, 20.0]
+        ],
+    }
+
+    for strategy, grid in param_grids.items():
+        for params in grid:
+            try:
+                df_ind = compute_indicators(df_raw, strategy, params)
+                if df_ind.empty or len(df_ind) < 60:
+                    continue
+                df_sig  = generate_signals(df_ind, strategy, params)
+                res     = run_backtest(df_sig, inv_cfg)
+
+                ps      = res["acc1_series"]
+                daily_r = ps.pct_change().dropna()
+                if len(daily_r) < 20:
+                    continue
+                ann_vol   = float(daily_r.std() * (252 ** 0.5))
+                cagr      = res["acc1_cagr"]
+                sharpe    = (cagr - RISK_FREE) / ann_vol if ann_vol > 0.001 else -99
+                max_dd    = res["acc1_drawdown"]   # 負值
+                n_trades  = len(res["buy_dates"])
+                years_bt  = max((df_sig.index[-1] - df_sig.index[0]).days / 365.25, 0.1)
+                # stability：用「calmar ratio」代理穩定性（CAGR / |最大回撤|）
+                stability = cagr / abs(max_dd) if abs(max_dd) > 0.001 else 0
+
+                # 摘要字串
+                if strategy == "MA 交叉策略":
+                    summary = f"MA{params['ma_fast']}/MA{params['ma_slow']}"
+                elif strategy == "RSI 動能策略":
+                    summary = f"RSI{params['rsi_period']} 買<{params['rsi_buy']} 賣>{params['rsi_sell']}"
+                elif strategy == "布林通道策略":
+                    summary = f"BB{params['bb_period']} ±{params['bb_std']}σ"
+                elif strategy == "MACD 趨勢策略":
+                    summary = f"MACD {params['macd_fast']}/{params['macd_slow']}/{params['macd_signal']}"
+                else:
+                    summary = (f"買MA{params['dev_buy_period']} "
+                               f"賣MA{params['dev_sell_period']}+{params['dev_sell_pct']:.0f}%")
+
+                results.append({
+                    "strategy":      strategy,
+                    "params":        params,
+                    "param_summary": summary,
+                    "sharpe":        round(sharpe, 4),
+                    "cagr":          cagr,
+                    "max_dd":        max_dd,
+                    "stability":     round(stability, 4),
+                    "n_trades":      n_trades,
+                    "ann_vol":       round(ann_vol, 4),
+                })
+            except Exception:
+                continue
+
+    if not results:
+        return []
+
+    # ── 標準化各指標到 [0,1]，再加權計算綜合分數 ──
+    import pandas as _pd
+    df_r = _pd.DataFrame(results)
+
+    def norm_col(col, higher_better=True):
+        mn, mx = col.min(), col.max()
+        if mx == mn:
+            return _pd.Series([0.5] * len(col))
+        normed = (col - mn) / (mx - mn)
+        return normed if higher_better else 1 - normed
+
+    df_r["_n_cagr"]      = norm_col(df_r["cagr"],      higher_better=True)
+    df_r["_n_sharpe"]    = norm_col(df_r["sharpe"],     higher_better=True)
+    df_r["_n_max_dd"]    = norm_col(df_r["max_dd"],     higher_better=False)  # 回撤越小越好
+    df_r["_n_stability"] = norm_col(df_r["stability"],  higher_better=True)
+
+    w_cagr  = weights.get("cagr",      0.25)
+    w_shar  = weights.get("sharpe",    0.25)
+    w_dd    = weights.get("max_dd",    0.25)
+    w_stab  = weights.get("stability", 0.25)
+
+    df_r["score"] = (
+        df_r["_n_cagr"]      * w_cagr +
+        df_r["_n_sharpe"]    * w_shar +
+        df_r["_n_max_dd"]    * w_dd   +
+        df_r["_n_stability"] * w_stab
+    )
+    df_r = df_r.sort_values("score", ascending=False).reset_index(drop=True)
+    for col in ["_n_cagr","_n_sharpe","_n_max_dd","_n_stability"]:
+        df_r.drop(columns=col, inplace=True)
+
+    return df_r.to_dict("records")
+
+
+def call_claude_analysis(api_key: str, ticker: str, top_results: list,
+                         weights: dict | None = None) -> str:
+    """呼叫 Claude API，解讀 Grid Search 最佳化結果。"""
+    import urllib.request, json as _json
+
+    weights   = weights or {"cagr": 0.25, "sharpe": 0.25, "max_dd": 0.25, "stability": 0.25}
+    w_desc    = (f"CAGR {weights['cagr']*100:.0f}% ／ "
+                 f"夏普比率 {weights['sharpe']*100:.0f}% ／ "
+                 f"最大回撤控制 {weights['max_dd']*100:.0f}% ／ "
+                 f"穩定性 {weights['stability']*100:.0f}%")
+
+    top_summary = "\n".join([
+        f"{i+1}. {r['strategy']} ({r['param_summary']}) — "
+        f"綜合分數={r['score']:.4f}, 夏普={r['sharpe']:.3f}, "
+        f"CAGR={r['cagr']:+.2%}, 最大回撤={r['max_dd']:.2%}, "
+        f"穩定性={r['stability']:.3f}, 交易{r['n_trades']}次"
+        for i, r in enumerate(top_results)
+    ])
+
+    prompt = f"""你是一位量化投資分析師。以下是對股票 {ticker} 進行回測最佳化的結果。
+
+使用者的指標加權偏好：{w_desc}
+（綜合分數 = 各指標標準化後依以上比重加權）
+
+排名結果（已按綜合分數排序）：
+{top_summary}
+
+請用繁體中文回答以下問題：
+1. 排名第一的策略為何符合使用者的加權偏好？請結合加權設定解釋。
+2. 前五名有哪些共同特徵？這反映了 {ticker} 的什麼市場特性？
+3. 若使用者想進一步優化，針對其偏好（加權方向）有什麼參數調整建議？
+4. 有沒有哪個策略雖然排名靠前但有潛在風險（例如交易次數極少、過擬合跡象）？
+5. 一句話總結：依照此加權偏好，{ticker} 最適合什麼風格的交易策略？
+
+回答請簡潔，每點 2-3 句話即可。"""
+
+    payload = _json.dumps({
+        "model": "claude-sonnet-4-20250514",
+        "max_tokens": 1000,
+        "messages": [{"role": "user", "content": prompt}]
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages",
+        data=payload,
+        headers={
+            "Content-Type":      "application/json",
+            "x-api-key":         api_key,
+            "anthropic-version": "2023-06-01",
+        },
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = _json.loads(resp.read())
+        return data["content"][0]["text"]
+    except Exception as e:
+        return f"❌ Claude API 呼叫失敗：{e}"
+
+
 def check_vcp(df: pd.DataFrame) -> dict:
     """VCP 四條件檢查"""
     c = df["Close"].squeeze()
@@ -1278,6 +1470,86 @@ def main():
             st.dataframe(pd.DataFrame(trades), use_container_width=True, hide_index=True)
         else:
             st.info("此策略在回測期間未產生任何信號交易。")
+
+    st.markdown("---")
+
+    # ── 策略最佳化 ──
+    st.markdown("## 🔍 策略最佳化")
+    st.caption("對此標的進行 Grid Search，依自訂指標加權找出最佳策略，再由 Claude AI 解讀結果。")
+
+    # ── 加權設定 ──
+    with st.expander("⚖️ 自訂指標加權（合計須為 100%）", expanded=True):
+        st.caption("調整各指標的重要程度，系統會將每個指標標準化後依比重計算綜合分數。")
+        wc1, wc2, wc3, wc4 = st.columns(4)
+        w_cagr  = wc1.slider("📈 年化報酬 CAGR",    0, 100, 30, 5,
+                             help="越高代表越重視絕對報酬率")
+        w_shar  = wc2.slider("📐 夏普比率",          0, 100, 30, 5,
+                             help="越高代表越重視風險調整後報酬")
+        w_dd    = wc3.slider("📉 最大回撤（越小越好）", 0, 100, 25, 5,
+                             help="越高代表越重視減少最大虧損幅度")
+        w_stab  = wc4.slider("🏔️ 穩定性（Calmar）",  0, 100, 15, 5,
+                             help="CAGR/最大回撤，衡量每單位風險獲得的報酬是否穩定")
+        total_w = w_cagr + w_shar + w_dd + w_stab
+        if total_w == 100:
+            st.success(f"✅ 合計 {total_w}%，配置有效")
+        else:
+            st.error(f"⚠️ 合計 {total_w}%，請調整至 100% 才能執行最佳化")
+
+    weights = {
+        "cagr":      w_cagr  / 100,
+        "sharpe":    w_shar  / 100,
+        "max_dd":    w_dd    / 100,
+        "stability": w_stab  / 100,
+    }
+
+    opt_c1, opt_c2 = st.columns([2, 1])
+    with opt_c1:
+        api_key = st.text_input("Anthropic API Key", type="password",
+                                placeholder="sk-ant-...",
+                                help="用於 Claude AI 解讀。Key 不會被儲存。")
+    with opt_c2:
+        st.markdown("<br>", unsafe_allow_html=True)
+        run_opt = st.button("🚀 開始最佳化", type="secondary",
+                            disabled=(total_w != 100))
+
+    if run_opt:
+        weight_desc = (f"CAGR {w_cagr}% ／ 夏普 {w_shar}% ／ "
+                       f"回撤 {w_dd}% ／ 穩定性 {w_stab}%")
+        with st.spinner("Grid Search 執行中，約需 10~30 秒..."):
+            opt_results = run_grid_search(df_raw, inv_cfg, weights)
+        if not opt_results:
+            st.error("最佳化失敗，請確認數據是否充足（建議至少 3 年）。")
+        else:
+            top10 = opt_results[:10]
+            st.markdown(f"### 📊 Top 10 策略排名")
+            st.caption(f"加權方式：{weight_desc}")
+            rows = []
+            for rank, r in enumerate(top10, 1):
+                rows.append({
+                    "排名":      rank,
+                    "策略":      r["strategy"],
+                    "參數摘要":  r["param_summary"],
+                    "綜合分數":  f"{r['score']:.4f}",
+                    "夏普比率":  f"{r['sharpe']:+.3f}",
+                    "CAGR":     f"{r['cagr']:+.2%}",
+                    "最大回撤":  f"{r['max_dd']:.2%}",
+                    "穩定性":   f"{r['stability']:.3f}",
+                    "交易次數":  r["n_trades"],
+                })
+            df_opt = pd.DataFrame(rows)
+            st.dataframe(df_opt, use_container_width=True, hide_index=True)
+
+            # ── Claude AI 解讀 ──
+            if api_key.startswith("sk-ant-"):
+                with st.spinner("Claude AI 分析中..."):
+                    ai_analysis = call_claude_analysis(
+                        api_key, ticker, top10, weights)
+                st.markdown("### 🤖 Claude AI 策略解讀")
+                st.markdown(ai_analysis)
+            elif api_key:
+                st.warning("API Key 格式不正確，請確認是否以 sk-ant- 開頭。")
+            else:
+                st.info("輸入 Anthropic API Key 可獲得 Claude AI 的策略解讀與建議。")
 
     st.markdown("---")
     st.markdown(
