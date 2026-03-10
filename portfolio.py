@@ -85,6 +85,38 @@ def fetch_portfolio_data(tickers: list[str], start: str, end: str) -> pd.DataFra
         return pd.DataFrame()
 
 
+
+
+@st.cache_data(ttl=3600)
+def fetch_dividends(tickers: list[str], start: str, end: str) -> pd.DataFrame:
+    """
+    下載各標的的股息資料（ex-dividend date 與金額）。
+    回傳 DataFrame，index=日期，columns=ticker，值為每股股息金額（0 代表無配息）。
+    只對美股有效；台股、現金不配息跳過。
+    """
+    if not tickers:
+        return pd.DataFrame()
+    result = {}
+    for ticker in tickers:
+        if ticker == "CASH" or ticker.endswith(".TW") or ticker.endswith(".T"):
+            continue
+        try:
+            tk   = yf.Ticker(ticker)
+            divs = tk.dividends  # Series，index=ex-date，value=每股金額
+            if divs.empty:
+                continue
+            # 過濾到回測區間
+            divs = divs[(divs.index >= pd.Timestamp(start)) &
+                        (divs.index <= pd.Timestamp(end))]
+            if not divs.empty:
+                result[ticker] = divs
+        except Exception:
+            continue
+    if not result:
+        return pd.DataFrame()
+    df = pd.DataFrame(result).fillna(0.0)
+    return df
+
 def detect_currency(ticker: str) -> str:
     """根據代號後綴判斷計價貨幣。"""
     t = ticker.upper()
@@ -154,14 +186,18 @@ def run_portfolio_backtest(
     prices: pd.DataFrame,
     weights: dict[str, float],
     initial: float,
-    rebalance_freq: str,   # "none" / "monthly" / "quarterly" / "yearly"
-    cash_return: float,    # 現金年化報酬率（0.0 ~ 0.05）
+    rebalance_freq: str,        # "none" / "monthly" / "quarterly" / "yearly"
+    cash_return: float,         # 現金年化報酬率（0.0 ~ 0.05）
+    commission: float = 0.0,    # 單邊手續費比例（買入+賣出各扣一次）
+    div_tax: float = 0.0,       # 股息預扣稅率（台灣居民投資美股：0.30）
+    dividends: pd.DataFrame | None = None,  # fetch_dividends 取得的股息資料
 ) -> dict:
     """
     組合回測引擎。
-    - 第一天依權重買入
-    - 依 rebalance_freq 定期再平衡
+    - 第一天依權重買入（扣手續費）
+    - 依 rebalance_freq 定期再平衡（買賣各扣手續費）
     - "CASH" 作為虛擬標的，每日以 cash_return/252 複利增長
+    - 配息日：股息金額 × (1 - div_tax) 加回現金池，超過的稅金從組合扣除
     """
     tickers = list(prices.columns)
     dates   = prices.index
@@ -182,9 +218,15 @@ def run_portfolio_backtest(
     total_w = sum(weights.values())
     w = {t: weights[t] / total_w for t in tickers if t in weights}
 
-    # 初始持股（第一天收盤價買入）
+    # 初始持股（第一天收盤價買入，扣手續費：買入成本 × (1+commission)）
     first_prices = prices.iloc[0]
-    shares = {t: initial * w.get(t, 0) / float(first_prices[t]) for t in tickers}
+    shares = {
+        t: initial * w.get(t, 0) / (float(first_prices[t]) * (1 + commission))
+        for t in tickers
+    }
+    total_commission_paid = sum(
+        initial * w.get(t, 0) * commission for t in tickers
+    )
 
     # 再平衡日期計算
     rebal_dates = set()
@@ -210,8 +252,31 @@ def run_portfolio_backtest(
         if date in rebal_dates and i > 0:
             total_val = sum(shares[t] * float(row[t]) for t in tickers)
             for t in tickers:
-                shares[t] = total_val * w.get(t, 0) / float(row[t])
+                target_val  = total_val * w.get(t, 0)
+                current_val = shares[t] * float(row[t])
+                diff = target_val - current_val
+                if diff > 0:
+                    # 買入：扣手續費（有效價格較高）
+                    eff_price   = float(row[t]) * (1 + commission)
+                    shares[t]   = target_val / eff_price
+                    total_val  -= diff * commission   # 手續費從池子扣
+                else:
+                    # 賣出：扣手續費（有效價格較低）
+                    shares[t]   = target_val / (float(row[t]) * (1 - commission)) if float(row[t]) > 0 else 0
+                    total_val  += diff * commission   # diff 為負，手續費扣損
             rebal_dates_hit.append(date)
+
+        # ── 股息稅務處理 ──
+        if dividends is not None and not dividends.empty and date in dividends.index:
+            div_row = dividends.loc[date]
+            for t in tickers:
+                if t in div_row and div_row[t] > 0:
+                    gross_div     = shares[t] * div_row[t]          # 稅前股息
+                    tax_drag      = gross_div * div_tax              # 預扣稅
+                    # 稅後股息已反映在 adjusted price 中，這裡扣除「額外損失」
+                    # yfinance 的 adjusted close 已含股息再投入假設，
+                    # 所以只扣稅率部分的損失（避免雙重計算）
+                    shares[t]    -= tax_drag / float(row[t]) if float(row[t]) > 0 else 0
 
         val = sum(shares[t] * float(row[t]) for t in tickers)
         portfolio_vals.append(val)
@@ -456,6 +521,31 @@ def render_portfolio_tab():
         )
 
         st.markdown("---")
+        st.markdown("**💸 交易成本 & 稅務設定**")
+        tc1, tc2, tc3 = st.columns(3)
+        commission_pct = tc1.select_slider(
+            "單邊手續費／滑價",
+            options=[0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0],
+            value=0.1,
+            format_func=lambda x: f"{x:.2f}%",
+            help="每筆買入或賣出各扣一次。美股ETF建議 0.05~0.1%；台股含證交稅建議 0.1~0.2%。"
+        )
+        enable_div_tax = tc2.toggle(
+            "美股股息預扣稅 30%",
+            value=False,
+            help="台灣居民投資美股，股息依條約預扣 30% 稅（非 ETF 配息稅）。開啟後每次配息日自動扣除稅額，影響長期複利約 0.5~1%/年。"
+        )
+        if enable_div_tax:
+            div_tax_rate = tc3.slider(
+                "預扣稅率", 0, 30, 30, 1,
+                format="%d%%",
+                help="美台條約標準為 30%；若持有符合條件的退休帳戶（如 IRA）可設為 0%。"
+            ) / 100
+            tc2.caption("📌 需下載股息資料，初次執行較慢。")
+        else:
+            div_tax_rate = 0.0
+
+        st.markdown("---")
         st.markdown("**📋 標的與權重設定**")
         st.caption("每行輸入一個標的代號與配置比例（%）。台股格式：2330.TW；現金請輸入 CASH。")
 
@@ -569,10 +659,22 @@ def render_portfolio_tab():
     # ──────────────────────────────────────────
     # 執行回測
     # ──────────────────────────────────────────
+    # 若開啟股息稅，下載各標的股息資料
+    dividends_df = None
+    if enable_div_tax and div_tax_rate > 0:
+        us_tickers = [t for t in final_tickers
+                      if not t.endswith(".TW") and not t.endswith(".T") and t != "CASH"]
+        if us_tickers:
+            with st.spinner("下載股息資料..."):
+                dividends_df = fetch_dividends(us_tickers, common_start, common_end)
+
     with st.spinner("計算組合績效..."):
         port_result = run_portfolio_backtest(
             prices_final, weights_final, initial,
-            rebalance_freq, cash_return_pct / 100
+            rebalance_freq, cash_return_pct / 100,
+            commission   = commission_pct / 100,
+            div_tax      = div_tax_rate,
+            dividends    = dividends_df,
         )
         asset_stats = calc_asset_stats(prices_final, initial)
 
@@ -589,6 +691,13 @@ def render_portfolio_tab():
     m5.metric("夏普比率",      f"{port_result['sharpe']:.3f}")
     if port_result["rebal_dates"]:
         st.caption(f"🔄 共執行 {len(port_result['rebal_dates'])} 次再平衡（圖中橘色虛線標示）")
+    cost_notes = []
+    if commission_pct > 0:
+        cost_notes.append(f"手續費 {commission_pct:.2f}%/單邊")
+    if enable_div_tax and div_tax_rate > 0:
+        cost_notes.append(f"股息預扣稅 {div_tax_rate*100:.0f}%")
+    if cost_notes:
+        st.caption(f"💸 已套用交易成本：{' ｜ '.join(cost_notes)}")
 
     # ──────────────────────────────────────────
     # 圖表分頁
@@ -655,7 +764,10 @@ def render_portfolio_tab():
                 with st.spinner("計算無再平衡基準..."):
                     no_rebal = run_portfolio_backtest(
                         prices_final, weights_final, initial,
-                        "none", cash_return_pct / 100
+                        "none", cash_return_pct / 100,
+                        commission = commission_pct / 100,
+                        div_tax    = div_tax_rate,
+                        dividends  = dividends_df,
                     )
                 delta_cagr = port_result["cagr"] - no_rebal["cagr"]
                 delta_dd   = port_result["max_dd"] - no_rebal["max_dd"]
