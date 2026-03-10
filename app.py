@@ -292,63 +292,112 @@ def compute_indicators(df: pd.DataFrame, strategy: str, params: dict) -> pd.Data
     return df.dropna()
 
 
+def _state_machine_signals(buy_cond: np.ndarray, sell_cond: np.ndarray,
+                            valid_mask: np.ndarray) -> np.ndarray:
+    """
+    通用狀態機：將買入/賣出條件陣列轉換為信號陣列。
+    規則：
+      - 空倉中：buy_cond 為 True → 產生買入信號(1)，進入持倉
+      - 持倉中：sell_cond 為 True → 產生賣出信號(-1)，回到空倉
+      - valid_mask 為 False 的位置跳過（用於跳過 NaN 區間）
+    保證買賣嚴格交替，不會出現重複信號。
+    """
+    n = len(buy_cond)
+    signals = np.zeros(n, dtype=int)
+    in_pos  = False
+    for i in range(n):
+        if not valid_mask[i]:
+            continue
+        if not in_pos:
+            if buy_cond[i]:
+                signals[i] = 1
+                in_pos = True
+        else:
+            if sell_cond[i]:
+                signals[i] = -1
+                in_pos = False
+    return signals
+
+
 def generate_signals(df: pd.DataFrame, strategy: str, params: dict) -> pd.DataFrame:
-    """產生買(1)/賣(-1)/持有(0) 信號"""
-    df = df.copy()
-    df["Signal"] = 0
-    c = df["Close"].squeeze()
+    """
+    產生買(1)/賣(-1)/持有(0) 信號。
+    所有策略統一使用狀態機，確保買賣嚴格交替、信號次數對稱。
+    """
+    df   = df.copy()
+    c    = df["Close"].squeeze()
+    nans = np.zeros(len(df), dtype=bool)   # 全部視為有效（個別策略再覆寫）
 
     if strategy == "MA 交叉策略":
-        f, s = f"MA{params['ma_fast']}", f"MA{params['ma_slow']}"
-        df["Signal"] = np.where(
-            (df[f] > df[s]) & (df[f].shift(1) <= df[s].shift(1)), 1,
-            np.where((df[f] < df[s]) & (df[f].shift(1) >= df[s].shift(1)), -1, 0))
+        f_col = df[f"MA{params['ma_fast']}"].values
+        s_col = df[f"MA{params['ma_slow']}"].values
+        valid = ~(np.isnan(f_col) | np.isnan(s_col))
+        # 黃金交叉買入，死亡交叉賣出
+        buy_cond  = f_col > s_col
+        sell_cond = f_col < s_col
+        df["Signal"] = _state_machine_signals(buy_cond, sell_cond, valid)
 
     elif strategy == "RSI 動能策略":
-        df["Signal"] = np.where(
-            (df["RSI"] < params["rsi_buy"]) & (df["RSI"].shift(1) >= params["rsi_buy"]), 1,
-            np.where((df["RSI"] > params["rsi_sell"]) & (df["RSI"].shift(1) <= params["rsi_sell"]), -1, 0))
+        rsi   = df["RSI"].values
+        valid = ~np.isnan(rsi)
+        buy_cond  = rsi < params["rsi_buy"]
+        sell_cond = rsi > params["rsi_sell"]
+        df["Signal"] = _state_machine_signals(buy_cond, sell_cond, valid)
 
     elif strategy == "布林通道策略":
-        df["Signal"] = np.where(
-            (c <= df["BB_Lower"]) & (c.shift(1) > df["BB_Lower"].shift(1)), 1,
-            np.where((c >= df["BB_Upper"]) & (c.shift(1) < df["BB_Upper"].shift(1)), -1, 0))
+        cl    = c.values
+        lower = df["BB_Lower"].values
+        upper = df["BB_Upper"].values
+        valid = ~(np.isnan(lower) | np.isnan(upper))
+        buy_cond  = cl <= lower
+        sell_cond = cl >= upper
+        df["Signal"] = _state_machine_signals(buy_cond, sell_cond, valid)
 
     elif strategy == "MACD 趨勢策略":
-        df["Signal"] = np.where(
-            (df["MACD"] > df["MACD_Signal"]) & (df["MACD"].shift(1) <= df["MACD_Signal"].shift(1)), 1,
-            np.where((df["MACD"] < df["MACD_Signal"]) & (df["MACD"].shift(1) >= df["MACD_Signal"].shift(1)), -1, 0))
+        macd   = df["MACD"].values
+        signal = df["MACD_Signal"].values
+        valid  = ~(np.isnan(macd) | np.isnan(signal))
+        buy_cond  = macd > signal
+        sell_cond = macd < signal
+        df["Signal"] = _state_machine_signals(buy_cond, sell_cond, valid)
 
     elif strategy == "MA均線偏離策略":
-        buy_th  = params["dev_buy_pct"]   # 低於均線 N%（負值或0）才買，例如 0 = 跌破均線即買
-        sell_th = params["dev_sell_pct"]  # 高於均線 N%（正值）才賣，例如 10 = 漲超 10% 賣
+        dev_buy   = df["Dev_Buy"].values
+        dev_sell  = df["Dev_Sell"].values
+        valid     = ~(np.isnan(dev_buy) | np.isnan(dev_sell))
+        buy_th    = params["dev_buy_pct"]
+        sell_th   = params["dev_sell_pct"]
+        buy_cd    = int(params.get("dev_buy_cooldown",  20))
+        sell_cd   = int(params.get("dev_sell_cooldown", 20))
 
-        # ── State-based 狀態機（持倉狀態決定邏輯，不是瞬間穿越）──
-        # 原本的 crossover 寫法只在「穿越那一天」才有訊號，
-        # 若均線一直沒被穿越則永遠沒訊號，且 acc1/acc2 初始持現金也進不了場。
-        # 改成：空倉時只要條件符合就買入；持倉時只要條件符合就賣出。
-        dev_buy_col  = df["Dev_Buy"].values
-        dev_sell_col = df["Dev_Sell"].values
-        ma_buy_col   = df[f"BuyMA{params['dev_buy_period']}"].values
-        signals_arr  = np.zeros(len(df), dtype=int)
-        in_pos = False
+        n           = len(df)
+        signals_arr = np.zeros(n, dtype=int)
+        in_pos      = False
+        last_buy_i  = -buy_cd  - 1   # 初始值確保第一天可觸發
+        last_sell_i = -sell_cd - 1
 
-        for idx_i in range(len(df)):
-            # 跳過均線尚未形成（NaN）的期間
-            if np.isnan(dev_buy_col[idx_i]) or np.isnan(dev_sell_col[idx_i]):
+        for idx_i in range(n):
+            if not valid[idx_i]:
                 continue
             if not in_pos:
-                # 空倉：收盤偏離率 <= 買入門檻 → 買入
-                if dev_buy_col[idx_i] <= buy_th:
+                # 空倉：條件符合 且 距上次買入超過買入冷卻期
+                if (dev_buy[idx_i] <= buy_th and
+                        (idx_i - last_buy_i) > buy_cd):
                     signals_arr[idx_i] = 1
-                    in_pos = True
+                    in_pos     = True
+                    last_buy_i = idx_i
             else:
-                # 持倉：收盤偏離率 >= 賣出門檻 → 賣出
-                if dev_sell_col[idx_i] >= sell_th:
+                # 持倉：條件符合 且 距上次賣出超過賣出冷卻期
+                if (dev_sell[idx_i] >= sell_th and
+                        (idx_i - last_sell_i) > sell_cd):
                     signals_arr[idx_i] = -1
-                    in_pos = False
+                    in_pos      = False
+                    last_sell_i = idx_i
 
         df["Signal"] = signals_arr
+
+    else:
+        df["Signal"] = 0
 
     return df
 
@@ -437,8 +486,9 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     buy_dates,  sell_dates  = [], []   # acc1 信號記錄（代表純策略）
     buy_prices, sell_prices = [], []
     dca_buy_dates, dca_buy_prices = [], []
-    a1_vals, a2_vals         = [], []
-    a1_inv_vals, a2_inv_vals = [], []
+    a1_vals, a2_vals           = [], []
+    a1_cash_vals, a2_cash_vals = [], []   # 現金池逐日數值
+    a1_inv_vals, a2_inv_vals   = [], []
 
     def do_buy(cash, shares, price):
         if buy_mode == "all_in":   use = cash
@@ -496,8 +546,12 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
             if a2_cash > 1.0:
                 a2_cash, a2_shares = do_buy(a2_cash, a2_shares, price)
 
-        a1_vals.append(a1_cash + a1_shares * price)
-        a2_vals.append(a2_cash + a2_shares * price)
+        a1_total = a1_cash + a1_shares * price
+        a2_total = a2_cash + a2_shares * price
+        a1_vals.append(a1_total)
+        a2_vals.append(a2_total)
+        a1_cash_vals.append(a1_cash)
+        a2_cash_vals.append(a2_cash)
         a1_inv_vals.append(a1_invested)
         a2_inv_vals.append(a2_invested)
 
@@ -537,8 +591,11 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
         "sell_prices":    sell_prices,
         "dca_buy_dates":  dca_buy_dates,
         "dca_buy_prices": dca_buy_prices,
-        "acc1_inv_series": pd.Series(a1_inv_vals, index=df.index),
-        "acc2_inv_series": pd.Series(a2_inv_vals, index=df.index),
+        "acc1_inv_series":  pd.Series(a1_inv_vals,   index=df.index),
+        "acc2_inv_series":  pd.Series(a2_inv_vals,   index=df.index),
+        # 現金池序列（用於現金比例圖診斷）
+        "acc1_cash_series": pd.Series(a1_cash_vals,  index=df.index),
+        "acc2_cash_series": pd.Series(a2_cash_vals,  index=df.index),
     }
 
 
@@ -887,23 +944,34 @@ def main():
                 params["macd_signal"] = st.slider("MACD 信號線", 5, 20, 9)
             elif strategy == "MA均線偏離策略":
                 st.markdown("**📉 買入條件**")
-                params["dev_buy_period"] = st.number_input(
+                bc1, bc2, bc3 = st.columns(3)
+                params["dev_buy_period"] = bc1.number_input(
                     "買入均線週期", min_value=5, max_value=500, value=30, step=5,
                     help="當收盤價跌破此均線時買入。例如 30 = 跌破 30 日均線即買入")
-                params["dev_buy_pct"] = 0.0   # 固定為 0，跌破均線即買
-                st.caption(f"買入：收盤價跌破 {params['dev_buy_period']} 日均線時買入")
+                params["dev_buy_pct"] = 0.0
+                params["dev_buy_cooldown"] = int(bc2.number_input(
+                    "買入冷卻（交易日）", min_value=1, max_value=250, value=20, step=5,
+                    help="買入觸發後，至少等幾個交易日才能再次買入。20≈1月，60≈1季"))
+                st.caption(
+                    f"買入：跌破 {params['dev_buy_period']} 日均線，"
+                    f"冷卻 {params['dev_buy_cooldown']} 交易日"
+                )
 
                 st.markdown("**📈 賣出條件**")
-                sc1, sc2 = st.columns(2)
+                sc1, sc2, sc3 = st.columns(3)
                 params["dev_sell_period"] = sc1.number_input(
                     "賣出均線週期", min_value=5, max_value=500, value=5, step=5,
-                    help="計算賣出基準的移動平均線週期，例如 5 表示 5 日均線")
+                    help="計算賣出基準的移動平均線週期")
                 params["dev_sell_pct"] = sc2.number_input(
                     "高於均線 % 賣出", min_value=0.1, max_value=100.0, value=20.0, step=0.5,
-                    help="收盤價高於此均線多少 % 時賣出。例如 10 = 漲超均線 10% 才賣")
+                    help="收盤價高於此均線多少 % 時賣出")
+                params["dev_sell_cooldown"] = int(sc3.number_input(
+                    "賣出冷卻（交易日）", min_value=1, max_value=250, value=20, step=5,
+                    help="賣出觸發後，至少等幾個交易日才能再次賣出。20≈1月，60≈1季"))
                 st.caption(
-                    f"賣出：收盤價高於 {params['dev_sell_period']} 日均線 "
-                    f"+{params['dev_sell_pct']:.1f}% 時賣出"
+                    f"賣出：高於 {params['dev_sell_period']} 日均線 "
+                    f"+{params['dev_sell_pct']:.1f}%，"
+                    f"冷卻 {params['dev_sell_cooldown']} 交易日"
                 )
 
         st.markdown("---")
@@ -1010,7 +1078,7 @@ def main():
     m7.metric("信號買 / 賣",  f"{n_buy} / {n_sell}")
     st.markdown("---")
 
-    tab1, tab2, tab3 = st.tabs(["📈 資產增長曲線", "🕯️ K線圖與買賣標記", "📉 回撤分析"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 資產增長曲線", "🕯️ K線圖與買賣標記", "📉 回撤分析", "💰 現金比例診斷"])
 
     with tab1:
         st.plotly_chart(plot_equity(result, bm, strategy, is_dca),
@@ -1051,6 +1119,77 @@ def main():
             legend=dict(bgcolor="rgba(255,255,255,0.9)", bordercolor="#e2e8f0", borderwidth=1),
             hovermode="x unified", height=380, margin=dict(l=10,r=10,t=50,b=10))
         st.plotly_chart(fig_dd, use_container_width=True)
+
+    with tab4:
+        # ── 現金比例 = 現金池 / 總資產 ──
+        a1_cash_s = result["acc1_cash_series"]
+        a2_cash_s = result["acc2_cash_series"]
+        a1_total_s = result["acc1_series"]
+        a2_total_s = result["acc2_series"]
+
+        # 避免除以零
+        a1_cash_pct = (a1_cash_s / a1_total_s.replace(0, np.nan) * 100).fillna(0)
+        a2_cash_pct = (a2_cash_s / a2_total_s.replace(0, np.nan) * 100).fillna(0)
+
+        fig_cash = go.Figure()
+
+        # acc2（主線）現金比例
+        fig_cash.add_trace(go.Scatter(
+            x=a2_cash_pct.index, y=a2_cash_pct.values,
+            name="現金比例（策略+DCA）" if is_dca else "現金比例（策略）",
+            line=dict(color="#0369a1", width=2),
+            fill="tozeroy", fillcolor="rgba(3,105,161,0.08)"))
+
+        # acc1 現金比例（DCA 模式時才顯示對比）
+        if is_dca:
+            fig_cash.add_trace(go.Scatter(
+                x=a1_cash_pct.index, y=a1_cash_pct.values,
+                name="現金比例（純策略無DCA）",
+                line=dict(color="#93c5fd", width=1.5, dash="dash")))
+
+        # 加入買賣信號標記線（方便對照何時現金變化）
+        for bd in result["buy_dates"]:
+            fig_cash.add_vline(x=bd, line_color="#16a34a",
+                               line_width=0.8, line_dash="dot", opacity=0.4)
+        for sd in result["sell_dates"]:
+            fig_cash.add_vline(x=sd, line_color="#dc2626",
+                               line_width=0.8, line_dash="dot", opacity=0.4)
+
+        fig_cash.update_layout(
+            title=dict(
+                text="💰 現金池比例（綠虛線=買入信號 / 紅虛線=賣出信號）",
+                font=dict(size=13, color="#0f172a")),
+            xaxis=dict(showgrid=True, gridcolor="#e2e8f0"),
+            yaxis=dict(showgrid=True, gridcolor="#e2e8f0",
+                       ticksuffix="%", range=[-2, 102]),
+            paper_bgcolor="#ffffff", plot_bgcolor="#f8fafc",
+            font=CHART["font"], hovermode="x unified", height=400,
+            legend=dict(bgcolor="rgba(255,255,255,0.9)",
+                        bordercolor="#e2e8f0", borderwidth=1),
+            margin=dict(l=10, r=10, t=50, b=10))
+        st.plotly_chart(fig_cash, use_container_width=True)
+
+        # 診斷摘要
+        avg_cash = float(a2_cash_pct.mean())
+        max_cash = float(a2_cash_pct.max())
+        zero_days = int((a2_cash_pct < 1).sum())
+        total_days = len(a2_cash_pct)
+        pct_zero = zero_days / total_days * 100
+
+        d1, d2, d3 = st.columns(3)
+        d1.metric("平均現金比例", f"{avg_cash:.1f}%",
+                  help="越低代表資金越積極運用，但也意味著較少備用資金")
+        d2.metric("最高現金比例", f"{max_cash:.1f}%",
+                  help="通常出現在賣出後、等待下次買入信號期間")
+        d3.metric("現金近乎 0 的天數", f"{zero_days} 天 ({pct_zero:.0f}%)",
+                  help="這段期間即使出現買入信號也無法加碼，可能代表需要增加初始資金或調整賣出策略")
+
+        if pct_zero > 60:
+            st.warning("⚠️ 超過 60% 的時間現金池接近 0，若此期間出現買入信號將無法執行。"
+                       "建議：增加初始資金、降低買入倉位比例、或調整賣出策略讓資金更早釋放。")
+        elif avg_cash > 40:
+            st.info("💡 平均現金比例偏高，資金有較多閒置時間。"
+                    "若希望更積極運用，可嘗試降低買入均線週期或縮短冷卻期。")
 
     with st.expander("📋 查看所有交易明細（信號交易）"):
         trades = []
