@@ -714,17 +714,29 @@ def render_portfolio_tab():
                 plot_portfolio_equity(port_result, prices_final,
                                       weights_final, initial,
                                       base_currency, currency_symbol),
-                use_container_width=True
+                use_container_width=True,
+                config=dict(
+                    locale="zh-TW", displayModeBar=True,
+                    modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
+                    toImageButtonOptions={"format":"png","filename":"portfolio_equity","scale":2},
+                    displaylogo=False,
+                )
             )
         with right:
             st.plotly_chart(plot_weight_pie(weights_final),
-                            use_container_width=True)
+                            use_container_width=True,
+                            config=dict(locale="zh-TW", displayModeBar=True,
+                                toImageButtonOptions={"format":"png","filename":"portfolio_weights","scale":2},
+                                displaylogo=False))
 
     with pt2:
         real_prices = prices_final[[t for t in final_tickers if t != "CASH"]]
         if len(real_prices.columns) >= 2:
             st.plotly_chart(plot_correlation_heatmap(real_prices),
-                            use_container_width=True)
+                            use_container_width=True,
+                            config=dict(locale="zh-TW", displayModeBar=True,
+                                toImageButtonOptions={"format":"png","filename":"correlation_heatmap","scale":2},
+                                displaylogo=False))
             # 解讀提示
             daily_r = real_prices.pct_change().dropna()
             corr    = daily_r.corr()
@@ -747,7 +759,11 @@ def render_portfolio_tab():
 
     with pt3:
         st.plotly_chart(plot_portfolio_drawdown(port_result),
-                        use_container_width=True)
+                        use_container_width=True,
+                        config=dict(locale="zh-TW", displayModeBar=True,
+                            modeBarButtonsToRemove=["select2d","lasso2d","autoScale2d"],
+                            toImageButtonOptions={"format":"png","filename":"portfolio_drawdown","scale":2},
+                            displaylogo=False))
 
     with pt4:
         if not asset_stats.empty:
