@@ -438,7 +438,7 @@ def _build_dca_dates(trading_days, dca_amount, dca_freq, mode):
     return dca_dates
 
 
-def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
+def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) -> dict:
     """
     ┌──────────────────────────────────────────────────────────────────┐
     │  4 帳戶設計（每月定投金額 = X）                                    │
@@ -468,6 +468,9 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
 
     dca_dates   = _build_dca_dates(df.index, dca_amount, dca_freq, mode)
     first_price = float(c.iloc[0])
+    ts_enabled  = bool((ts_cfg or {}).get("enabled", False))
+    ts_mode     = (ts_cfg or {}).get("mode", "pct")
+    ts_value    = float((ts_cfg or {}).get("value", 0.1))
 
     # ── acc1：初始全買 + 每月X→現金池 + 信號換手 ──
     a1_shares   = initial / first_price
@@ -481,6 +484,10 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
     a2_invested = initial
     a2_dca_shares_invested = 0.0   # DCA 直接買股的累計金額
     a2_signal_invested     = 0.0   # 現金池累計注入
+
+    # Trailing Stop 追蹤（各帳戶獨立）
+    a1_trail_high = 0.0   # acc1 持倉期間最高價
+    a2_trail_high = 0.0   # acc2 持倉期間最高價
 
     # 記錄
     buy_dates,  sell_dates  = [], []   # acc1 信號記錄（代表純策略）
@@ -528,6 +535,42 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
             dca_buy_dates.append(idx)
             dca_buy_prices.append(price)
 
+        # ── Trailing Stop：更新持倉高點，觸發則強制賣出 ──
+        if ts_enabled:
+            # 更新各帳戶的持倉最高價
+            if a1_shares > 1e-6:
+                a1_trail_high = max(a1_trail_high, price)
+            else:
+                a1_trail_high = 0.0   # 空倉時重置
+            if a2_shares > 1e-6:
+                a2_trail_high = max(a2_trail_high, price)
+            else:
+                a2_trail_high = 0.0
+
+            # 判斷是否觸發停利
+            def ts_triggered(trail_high, cur_price):
+                if trail_high <= 0: return False
+                if ts_mode == "pct":
+                    return cur_price <= trail_high * (1 - ts_value)
+                else:  # fixed
+                    return cur_price <= trail_high - ts_value
+
+            # acc1 強制賣出
+            if ts_triggered(a1_trail_high, price) and a1_shares > 1e-6:
+                a1_cash, a1_shares = do_sell(a1_cash, a1_shares, price)
+                sell_dates.append(idx); sell_prices.append(price)
+                a1_trail_high = 0.0
+                signal = 0   # 避免下方再次觸發一般賣出邏輯重複記錄
+
+            # acc2 強制賣出
+            if ts_triggered(a2_trail_high, price) and a2_shares > 1e-6:
+                a2_cash, a2_shares = do_sell(a2_cash, a2_shares, price)
+                a2_trail_high = 0.0
+                signal = 0
+
+        # 買入後重置 trailing high（讓新持倉從買入當天開始追蹤）
+        # （在買入後立即設為當天價格，下方買入邏輯之後處理）
+
         # 賣出信號：從 shares 賣出，所得放入各自現金池
         if signal == -1:
             if a1_shares > 1e-6:
@@ -543,8 +586,12 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict) -> dict:
                 a1_cash, a1_shares = do_buy(a1_cash, a1_shares, price)
                 if a1_shares > prev:
                     buy_dates.append(idx); buy_prices.append(price)
+                    a1_trail_high = price   # 新買入，從當天開始追蹤高點
             if a2_cash > 1.0:
+                prev2 = a2_shares
                 a2_cash, a2_shares = do_buy(a2_cash, a2_shares, price)
+                if a2_shares > prev2:
+                    a2_trail_high = price
 
         a1_total = a1_cash + a1_shares * price
         a2_total = a2_cash + a2_shares * price
@@ -975,6 +1022,28 @@ def main():
                 )
 
         st.markdown("---")
+        st.markdown("### 🛡️ 移動停利（Trailing Stop）")
+        enable_ts = st.toggle("開啟移動停利", value=False,
+                              help="持倉期間追蹤最高價，若回撤超過設定幅度則強制賣出，避免獲利回吐或長期套牢")
+        ts_cfg = {"enabled": False}
+        if enable_ts:
+            ts_mode = st.radio("觸發方式", ["回撤百分比", "固定價差"],
+                               horizontal=True,
+                               help="回撤百分比：從持倉高點下跌 N% 觸發；固定價差：從持倉高點下跌固定金額觸發")
+            if ts_mode == "回撤百分比":
+                ts_pct = st.slider("回撤觸發比例", 1, 50, 10, step=1,
+                                   format="%d%%",
+                                   help="例如 10% = 股價從持倉期間最高點跌超過 10% 就賣出")
+                ts_cfg = {"enabled": True, "mode": "pct", "value": ts_pct / 100}
+                st.caption(f"持倉高點回落 {ts_pct}% 時強制賣出")
+            else:
+                ts_gap = st.number_input("固定價差觸發（$）", min_value=0.1,
+                                         max_value=10000.0, value=10.0, step=0.5,
+                                         help="例如 10 = 股價從持倉期間最高點下跌 $10 就賣出")
+                ts_cfg = {"enabled": True, "mode": "fixed", "value": ts_gap}
+                st.caption(f"持倉高點下跌 ${ts_gap:.2f} 時強制賣出")
+
+        st.markdown("---")
         st.markdown("### 🔬 VCP 篩選器")
         enable_vcp = st.toggle("開啟 VCP 趨勢檢查", value=False)
 
@@ -1021,7 +1090,7 @@ def main():
             df["Signal"] = 0
         st.markdown("---")
 
-    result = run_backtest(df, inv_cfg)
+    result = run_backtest(df, inv_cfg, ts_cfg)
     bm     = compute_benchmark(df, inv_cfg)
     is_dca = inv_cfg["mode"] == "dca"
     years  = (df.index[-1] - df.index[0]).days / 365.25
