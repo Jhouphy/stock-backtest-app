@@ -215,7 +215,7 @@ def apply_opt_result(r: dict):
     必須在所有 widget 渲染之前呼叫，才不會觸發 StreamlitAPIException。
     """
     st.session_state["_pending_apply"] = r
-    st.session_state["_auto_run"] = True
+    st.session_state["_show_apply_banner"] = True
     st.rerun()
 
 
@@ -261,8 +261,10 @@ def main():
     # ── 必須在所有 widget 渲染前執行，寫入套用設定 ──
     _flush_pending_apply()
     # 在任何 widget 渲染前取出所有 flag，避免 widget reconciliation rerun 時遺失
-    _applied     = st.session_state.pop("_auto_run", False)     # 剛套用最佳化設定
-    _do_backtest = st.session_state.pop("_do_backtest", False)  # 使用者點擊「立即回測」
+    # banner flag（持久，用 get 讀取，不消耗它）
+    _show_banner = st.session_state.get("_show_apply_banner", False)
+    # 用戶點了「立即回測」（一次性，pop 消耗）
+    _do_backtest = st.session_state.pop("_do_backtest", False)
 
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
@@ -493,8 +495,8 @@ def main():
 
     with main_tab1:
         if not run_btn:
-            if _applied:
-                # 剛套用最佳化設定：顯示確認橫幅 + 一鍵回測按鈕
+            if _show_banner:
+                # 套用最佳化設定後：持久 banner + 捲回頂部 + 立即回測按鈕
                 st.components.v1.html(
                     "<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
                     height=0,
@@ -505,6 +507,7 @@ def main():
                     icon="🎯"
                 )
                 if _b2.button("▶ 立即執行回測", type="primary", use_container_width=True):
+                    st.session_state.pop("_show_apply_banner", None)
                     st.session_state["_do_backtest"] = True
                     st.rerun()
             else:
@@ -515,6 +518,8 @@ def main():
                 col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
                 col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
         else:
+            # 執行回測時清除 banner
+            st.session_state.pop("_show_apply_banner", None)
             with st.spinner(f"正在下載 {ticker} 數據..."):
                 df_raw = fetch_data(ticker, start_date, end_str)
     
