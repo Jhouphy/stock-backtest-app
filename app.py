@@ -224,7 +224,6 @@ def apply_opt_result(r: dict):
     必須在所有 widget 渲染之前呼叫，才不會觸發 StreamlitAPIException。
     """
     st.session_state["_pending_apply"] = r
-    st.session_state["_show_apply_banner"] = True
     st.rerun()
 
 
@@ -270,8 +269,6 @@ def main():
     # ── 必須在所有 widget 渲染前執行，寫入套用設定 ──
     _flush_pending_apply()
     # 在任何 widget 渲染前取出所有 flag，避免 widget reconciliation rerun 時遺失
-    # banner flag（持久，用 get 讀取，不消耗它）
-    _show_banner = st.session_state.get("_show_apply_banner", False)
     # 用戶點了「立即回測」（一次性，pop 消耗）
     _do_backtest = st.session_state.pop("_do_backtest", False)
 
@@ -503,42 +500,13 @@ def main():
 
     with main_tab1:
         if not run_btn:
-            if _show_banner:
-                # 套用後：訊息卡 + 正中大按鈕
-                st.markdown("""
-                <div style="
-                    background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-                    border: 2px solid #0369a1;
-                    border-radius: 16px;
-                    padding: 28px 32px;
-                    text-align: center;
-                    margin: 20px 0;
-                ">
-                    <div style="font-size: 2rem; margin-bottom: 8px;">🎯</div>
-                    <div style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin-bottom: 6px;">
-                        最佳化設定已套用至側邊欄
-                    </div>
-                    <div style="font-size: 0.85rem; color: #475569;">
-                        可在左側側邊欄確認參數，確認後點擊下方按鈕執行回測
-                    </div>
-                </div>
-                """, unsafe_allow_html=True)
-                # 置中大按鈕：用三欄讓按鈕居中
-                _bc1, _bc2, _bc3 = st.columns([1, 2, 1])
-                if _bc2.button("▶ 立即執行回測", type="primary", use_container_width=True):
-                    st.session_state.pop("_show_apply_banner", None)
-                    st.session_state["_do_backtest"] = True
-                    st.rerun()
-            else:
-                st.info("👈 請在左側設定參數後，點擊「執行回測分析」開始分析。", icon="💡")
-                col1, col2, col3, col4 = st.columns(4)
-                col1.markdown("**MA 交叉策略**\n\n快慢均線黃金/死亡交叉，捕捉趨勢轉換。")
-                col2.markdown("**RSI 動能策略**\n\n超賣買入、超買賣出，適合震盪行情。")
-                col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
-                col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
+            st.info("👈 請在左側設定參數後，點擊「執行回測分析」開始分析。", icon="💡")
+            col1, col2, col3, col4 = st.columns(4)
+            col1.markdown("**MA 交叉策略**\n\n快慢均線黃金/死亡交叉，捕捉趨勢轉換。")
+            col2.markdown("**RSI 動能策略**\n\n超賣買入、超買賣出，適合震盪行情。")
+            col3.markdown("**布林通道策略**\n\n觸碰下軌買入、上軌賣出，依賴均值回歸。")
+            col4.markdown("**MACD 趨勢策略**\n\nMACD 交叉追蹤動能方向。")
         else:
-            # 執行回測時清除 banner
-            st.session_state.pop("_show_apply_banner", None)
             with st.spinner(f"正在下載 {ticker} 數據..."):
                 df_raw = fetch_data(ticker, start_date, end_str)
     
@@ -890,11 +858,27 @@ def main():
                         f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
                         f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}　分數 {r['score']:.3f}"
                     )
-                    if st.button(f"套用第{col_idx+1}名設定",
-                                 key=f"apply_btn_{col_idx}",
-                                 type="primary" if col_idx == 0 else "secondary",
-                                 use_container_width=True):
-                        apply_opt_result(r)
+                    applied_key = f"_col_applied_{col_idx}"
+                    if st.session_state.get(applied_key):
+                        # 已套用：顯示確認 + 立即回測（在同一個 column）
+                        st.success("✅ 設定已套用！", icon="🎯")
+                        if st.button("▶ 立即執行回測",
+                                     key=f"run_after_{col_idx}",
+                                     type="primary",
+                                     use_container_width=True):
+                            for i in range(3):
+                                st.session_state[f"_col_applied_{i}"] = False
+                            st.session_state["_do_backtest"] = True
+                            st.rerun()
+                    else:
+                        if st.button(f"套用第{col_idx+1}名設定",
+                                     key=f"apply_btn_{col_idx}",
+                                     type="primary" if col_idx == 0 else "secondary",
+                                     use_container_width=True):
+                            for i in range(3):
+                                st.session_state[f"_col_applied_{i}"] = False
+                            st.session_state[applied_key] = True
+                            apply_opt_result(r)
 
             # ── Claude AI（只在剛跑完時）──
             if run_opt:
