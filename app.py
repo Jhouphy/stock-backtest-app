@@ -845,28 +845,6 @@ def main():
                     st.info("輸入 Anthropic API Key 可獲得 Claude AI 的策略解讀與建議。")
         else:
             st.info("點擊「開始最佳化」執行 Grid Search，完成後可在此查看結果並一鍵套用。", icon="💡")
-            # ── 前三名套用按鈕（restore 區塊也要有）──
-            st.markdown("#### 🏅 前三名一鍵套用")
-            medals = ["🥇", "🥈", "🥉"]
-            top3_cols = st.columns(3)
-            for col_idx, (col, r) in enumerate(zip(top3_cols, _prev[:3])):
-                cfg = r.get("inv_cfg", {})
-                buy_lbl  = {"all_in":"全倉買","fixed_pct":f"{cfg.get('buy_pct',1)*100:.0f}%買","fixed_amount":f"固定${cfg.get('buy_amount',0):,.0f}買"}.get(cfg.get("buy_mode","all_in"),"全倉買")
-                sell_lbl = {"all_out":"全倉賣","fixed_pct":f"{cfg.get('sell_pct',1)*100:.0f}%賣","fixed_amount":f"固定${cfg.get('sell_amount',0):,.0f}賣"}.get(cfg.get("sell_mode","all_out"),"全倉賣")
-                dca_lbl  = "DCA" if cfg.get("mode") == "dca" else "一次性"
-                with col:
-                    st.markdown(
-                        f"**{medals[col_idx]} 第{col_idx+1}名**\n\n"
-                        f"`{r['strategy']}`\n\n"
-                        f"📐 {r['param_summary']}\n\n"
-                        f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
-                        f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}"
-                    )
-                    if st.button(f"套用第{col_idx+1}名設定", key=f"restore_btn_{col_idx}",
-                                 type="primary" if col_idx == 0 else "secondary",
-                                 use_container_width=True):
-                        apply_opt_result(r)
-            st.caption("💡 調整加權比例後點擊「開始最佳化」重新計算排名。")
 
         st.markdown("---")
         st.markdown(
