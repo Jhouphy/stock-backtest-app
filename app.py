@@ -747,103 +747,110 @@ def main():
             run_opt = st.button("🚀 開始最佳化", type="secondary",
                                 disabled=(total_w != 100))
 
+        # ── 執行 Grid Search（只在按下按鈕時跑）──
         if run_opt:
-            # 從 session_state 取回測資料（避免按鈕點擊觸發重跑時變數消失）
             _df_raw  = st.session_state.get("_opt_df_raw")
             _inv_cfg = st.session_state.get("_opt_inv_cfg")
-            _ticker  = st.session_state.get("_opt_ticker", ticker)
-
             if _df_raw is None or _inv_cfg is None:
                 st.error("⚠️ 請先點擊「執行回測分析」完成回測，再執行最佳化。")
-                st.stop()
-
-            weight_desc = (f"CAGR {w_cagr}% ／ 夏普 {w_shar}% ／ "
-                           f"回撤 {w_dd}% ／ 穩定性 {w_stab}%")
-            with st.spinner("Grid Search 執行中，約需 10~30 秒..."):
-                opt_results = run_grid_search(_df_raw, _inv_cfg, weights)
-                if opt_results:
-                    st.session_state["_opt_results"]      = opt_results
-                    st.session_state["_opt_weight_desc"]  = weight_desc
-            if not opt_results:
-                st.error("最佳化失敗，請確認數據是否充足（建議至少 3 年）。")
             else:
-                top10 = opt_results[:10]
-                st.markdown(f"### 📊 Top 10 策略排名")
-                st.caption(f"加權方式：{weight_desc}")
-                rows = []
-                for rank, r in enumerate(top10, 1):
-                    rows.append({
-                        "排名":      rank,
-                        "策略":      r["strategy"],
-                        "策略參數":  r["param_summary"],
-                        "倉位設定":  r.get("pos_summary", "—"),
-                        "綜合分數":  f"{r['score']:.4f}",
-                        "夏普比率":  f"{r['sharpe']:+.3f}",
-                        "CAGR":     f"{r['cagr']:+.2%}",
-                        "最大回撤":  f"{r['max_dd']:.2%}",
-                        "穩定性":   f"{r['stability']:.3f}",
-                        "交易次數":  r["n_trades"],
-                    })
-                df_opt = pd.DataFrame(rows)
-                st.dataframe(df_opt, use_container_width=True, hide_index=True)
+                weight_desc = (f"CAGR {w_cagr}% ／ 夏普 {w_shar}% ／ "
+                               f"回撤 {w_dd}% ／ 穩定性 {w_stab}%")
+                with st.spinner("Grid Search 執行中，約需 10~30 秒..."):
+                    opt_results = run_grid_search(_df_raw, _inv_cfg, weights)
+                if opt_results:
+                    st.session_state["_opt_results"]     = opt_results
+                    st.session_state["_opt_weight_desc"] = weight_desc
+                    st.session_state["_opt_ticker_val"]  = st.session_state.get("_opt_ticker", "")
+                else:
+                    st.error("最佳化失敗，請確認數據是否充足（建議至少 3 年）。")
 
-                # ── 前三名一鍵套用 ──
-                st.markdown("#### 🏅 前三名一鍵套用")
-                st.caption("點擊按鈕後側邊欄所有設定將自動更新，再按「執行回測分析」即可重現結果。")
-                medals = ["🥇", "🥈", "🥉"]
-                top3_cols = st.columns(3)
-                for col_idx, (col, r) in enumerate(zip(top3_cols, top10[:3])):
-                    cfg = r.get("inv_cfg", {})
-                    buy_lbl  = {"all_in":"全倉買","fixed_pct":f"{cfg.get('buy_pct',1)*100:.0f}%買","fixed_amount":f"固定${cfg.get('buy_amount',0):,.0f}買"}.get(cfg.get("buy_mode","all_in"),"全倉買")
-                    sell_lbl = {"all_out":"全倉賣","fixed_pct":f"{cfg.get('sell_pct',1)*100:.0f}%賣","fixed_amount":f"固定${cfg.get('sell_amount',0):,.0f}賣"}.get(cfg.get("sell_mode","all_out"),"全倉賣")
-                    dca_lbl  = "DCA" if cfg.get("mode") == "dca" else "一次性"
-                    with col:
-                        card = (
-                            f"**{medals[col_idx]} 第{col_idx+1}名**\n\n"
-                            f"`{r['strategy']}`\n\n"
-                            f"📐 {r['param_summary']}\n\n"
-                            f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
-                            f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}　分數 {r['score']:.3f}"
-                        )
-                        st.markdown(card)
-                        if st.button(f"套用第{col_idx+1}名設定", key=f"apply_btn_{col_idx}",
-                                     type="primary" if col_idx == 0 else "secondary",
-                                     use_container_width=True):
-                            apply_opt_result(r)
+        # ── 顯示結果（永遠從 session_state 讀，與 run_opt 無關）──
+        if "_opt_results" in st.session_state:
+            _prev       = st.session_state["_opt_results"][:10]
+            _prev_desc  = st.session_state.get("_opt_weight_desc", "")
+            _prev_ticker= st.session_state.get("_opt_ticker_val", ticker)
 
-                # ── Claude AI 解讀 ──
+            st.markdown("### 📊 Top 10 策略排名")
+            if _prev_desc:
+                st.caption(f"加權方式：{_prev_desc}")
+
+            rows = []
+            for rank, r in enumerate(_prev, 1):
+                rows.append({
+                    "排名":    rank,       "策略":    r["strategy"],
+                    "策略參數": r["param_summary"],
+                    "倉位設定": r.get("pos_summary", "—"),
+                    "綜合分數": f"{r['score']:.4f}",
+                    "夏普比率": f"{r['sharpe']:+.3f}",
+                    "CAGR":   f"{r['cagr']:+.2%}",
+                    "最大回撤": f"{r['max_dd']:.2%}",
+                    "穩定性":  f"{r['stability']:.3f}",
+                    "交易次數": r["n_trades"],
+                })
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+            # ── 前三名一鍵套用（永遠顯示，點擊後立即生效）──
+            st.markdown("#### 🏅 前三名一鍵套用")
+            st.caption("點擊後側邊欄設定自動更新，並立即重新執行回測。")
+            medals = ["🥇", "🥈", "🥉"]
+            top3_cols = st.columns(3)
+            for col_idx, (col, r) in enumerate(zip(top3_cols, _prev[:3])):
+                cfg      = r.get("inv_cfg", {})
+                buy_lbl  = {"all_in":"全倉買","fixed_pct":f"{cfg.get('buy_pct',1)*100:.0f}%買","fixed_amount":f"固定${cfg.get('buy_amount',0):,.0f}買"}.get(cfg.get("buy_mode","all_in"),"全倉買")
+                sell_lbl = {"all_out":"全倉賣","fixed_pct":f"{cfg.get('sell_pct',1)*100:.0f}%賣","fixed_amount":f"固定${cfg.get('sell_amount',0):,.0f}賣"}.get(cfg.get("sell_mode","all_out"),"全倉賣")
+                dca_lbl  = "DCA" if cfg.get("mode") == "dca" else "一次性"
+                with col:
+                    st.markdown(
+                        f"**{medals[col_idx]} 第{col_idx+1}名**\n\n"
+                        f"`{r['strategy']}`\n\n"
+                        f"📐 {r['param_summary']}\n\n"
+                        f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
+                        f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}　分數 {r['score']:.3f}"
+                    )
+                    if st.button(f"套用第{col_idx+1}名設定",
+                                 key=f"apply_btn_{col_idx}",
+                                 type="primary" if col_idx == 0 else "secondary",
+                                 use_container_width=True):
+                        apply_opt_result(r)
+
+            # ── Claude AI（只在剛跑完時）──
+            if run_opt:
                 if api_key.startswith("sk-ant-"):
                     with st.spinner("Claude AI 分析中..."):
                         ai_analysis = call_claude_analysis(
-                            api_key, _ticker, top10, weights)
+                            api_key, _prev_ticker, _prev,
+                            {"cagr": w_cagr/100, "sharpe": w_shar/100,
+                             "max_dd": w_dd/100, "stability": w_stab/100})
                     st.markdown("### 🤖 Claude AI 策略解讀")
                     st.markdown(ai_analysis)
                 elif api_key:
                     st.warning("API Key 格式不正確，請確認是否以 sk-ant- 開頭。")
                 else:
                     st.info("輸入 Anthropic API Key 可獲得 Claude AI 的策略解讀與建議。")
-
-        # 滑桿調整後重跑腳本時，從 session_state 恢復上次最佳化結果
-        if not run_opt and "_opt_results" in st.session_state:
-            _prev = st.session_state["_opt_results"][:10]
-            _prev_desc = st.session_state.get("_opt_weight_desc", "")
-            st.markdown(f"### 📊 Top 10 策略排名（上次結果）")
-            if _prev_desc:
-                st.caption(f"加權方式：{_prev_desc}")
-            rows = []
-            for rank, r in enumerate(_prev, 1):
-                rows.append({
-                    "排名": rank, "策略": r["strategy"],
-                    "策略參數": r["param_summary"],
-                    "倉位設定": r.get("pos_summary", "—"),
-                    "綜合分數": f"{r['score']:.4f}",
-                    "夏普比率": f"{r['sharpe']:+.3f}",
-                    "CAGR": f"{r['cagr']:+.2%}",
-                    "最大回撤": f"{r['max_dd']:.2%}",
-                    "穩定性": f"{r['stability']:.3f}",
-                    "交易次數": r["n_trades"],
-                })
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        else:
+            st.info("點擊「開始最佳化」執行 Grid Search，完成後可在此查看結果並一鍵套用。", icon="💡")
+            # ── 前三名套用按鈕（restore 區塊也要有）──
+            st.markdown("#### 🏅 前三名一鍵套用")
+            medals = ["🥇", "🥈", "🥉"]
+            top3_cols = st.columns(3)
+            for col_idx, (col, r) in enumerate(zip(top3_cols, _prev[:3])):
+                cfg = r.get("inv_cfg", {})
+                buy_lbl  = {"all_in":"全倉買","fixed_pct":f"{cfg.get('buy_pct',1)*100:.0f}%買","fixed_amount":f"固定${cfg.get('buy_amount',0):,.0f}買"}.get(cfg.get("buy_mode","all_in"),"全倉買")
+                sell_lbl = {"all_out":"全倉賣","fixed_pct":f"{cfg.get('sell_pct',1)*100:.0f}%賣","fixed_amount":f"固定${cfg.get('sell_amount',0):,.0f}賣"}.get(cfg.get("sell_mode","all_out"),"全倉賣")
+                dca_lbl  = "DCA" if cfg.get("mode") == "dca" else "一次性"
+                with col:
+                    st.markdown(
+                        f"**{medals[col_idx]} 第{col_idx+1}名**\n\n"
+                        f"`{r['strategy']}`\n\n"
+                        f"📐 {r['param_summary']}\n\n"
+                        f"💰 {dca_lbl} ／ {buy_lbl} ／ {sell_lbl}\n\n"
+                        f"📈 CAGR {r['cagr']:+.2%}　回撤 {r['max_dd']:.2%}"
+                    )
+                    if st.button(f"套用第{col_idx+1}名設定", key=f"restore_btn_{col_idx}",
+                                 type="primary" if col_idx == 0 else "secondary",
+                                 use_container_width=True):
+                        apply_opt_result(r)
             st.caption("💡 調整加權比例後點擊「開始最佳化」重新計算排名。")
 
         st.markdown("---")
