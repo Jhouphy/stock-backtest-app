@@ -266,6 +266,13 @@ def main():
     # 用戶點了「立即回測」（一次性，pop 消耗）
     _do_backtest = st.session_state.pop("_do_backtest", False)
 
+    # 剛套用最佳化設定時，立即捲回頂部（在任何 UI 渲染前執行）
+    if _show_banner:
+        st.components.v1.html(
+            "<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
+            height=0,
+        )
+
     st.markdown('<div class="main-title">📈 投資<span>研究</span>工作站</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">Strategy Backtesting · Portfolio Analysis · VCP Screening</div>',
                 unsafe_allow_html=True)
@@ -292,21 +299,18 @@ def main():
             start_dt = end_dt.replace(year=end_dt.year - years_back, day=28)
         start_date = start_dt.strftime("%Y-%m-%d")
         end_str    = end_date.strftime("%Y-%m-%d")
-        # ── 初始資金 + 貨幣快選 ──
-        _cap_c1, _cap_c2 = st.columns([3, 2])
-        with _cap_c2:
-            st.markdown("<div style='margin-top:28px'></div>", unsafe_allow_html=True)
-            _currency = st.radio("計價貨幣", ["USD", "TWD"], horizontal=True,
-                key="w_display_currency",
-                help="切換後自動調整初始資金建議金額與符號，不影響回測邏輯（回測以股票原始貨幣計算）。")
+        # ── 計價貨幣快選（獨立一行）──
+        _currency = st.radio("計價貨幣", ["USD", "TWD"], horizontal=True,
+            key="w_display_currency",
+            help="切換後自動調整初始資金建議金額與符號，不影響回測邏輯（回測以股票原始貨幣計算）。")
         _usd_mode = (_currency == "USD")
         _symbol   = "$" if _usd_mode else "NT$"
         _default  = 100_000 if _usd_mode else 3_000_000
         _step     = 10_000  if _usd_mode else 100_000
-        with _cap_c1:
-            initial_capital = st.number_input(f"初始資金 ({_currency})", min_value=0,
-                max_value=(10_000_000 if _usd_mode else 300_000_000),
-                value=_default, step=_step, format="%d", key="w_initial")
+        # ── 初始資金（獨立一行，全寬）──
+        initial_capital = st.number_input(f"初始資金 ({_currency})", min_value=0,
+            max_value=(10_000_000 if _usd_mode else 300_000_000),
+            value=_default, step=_step, format="%d", key="w_initial")
 
         # ── 投入方式 ──
         st.markdown("### 💰 投入方式")
@@ -496,11 +500,7 @@ def main():
     with main_tab1:
         if not run_btn:
             if _show_banner:
-                # 套用最佳化設定後：持久 banner + 捲回頂部 + 立即回測按鈕
-                st.components.v1.html(
-                    "<script>window.parent.scrollTo({top: 0, behavior: 'smooth'});</script>",
-                    height=0,
-                )
+                # 套用最佳化設定後：持久 banner + 立即回測按鈕（捲頂已在 main() 頂部處理）
                 _b1, _b2 = st.columns([3, 1])
                 _b1.success(
                     "✅ 最佳化設定已套用到側邊欄！確認參數後點擊右側按鈕立即執行回測。",
