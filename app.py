@@ -308,10 +308,12 @@ def main():
         _symbol   = "$" if _usd_mode else "NT$"
         _default  = 100_000 if _usd_mode else 3_000_000
         _step     = 10_000  if _usd_mode else 100_000
-        # ── 初始資金（獨立一行，全寬）──
-        initial_capital = st.number_input(f"初始資金 ({_currency})", min_value=0,
+        # ── 初始資金（可為 0，代表純 DCA 起步）──
+        initial_capital = st.number_input(f"初始資金 ({_currency})",
+            min_value=0,
             max_value=(10_000_000 if _usd_mode else 300_000_000),
-            value=_default, step=_step, format="%d", key="w_initial")
+            value=_default, step=_step, format="%d", key="w_initial",
+            help="可設為 0，代表從零開始純靠定期投入累積。")
 
         # ── 投入方式 ──
         st.markdown("### 💰 投入方式")
@@ -319,17 +321,30 @@ def main():
             horizontal=True, key="w_inv_mode",
             help="一次性：回測起始日全額買入。定期定額：每月固定日注入資金，模擬長期積累。")
 
-        dca_amount, dca_freq = 0, 1
+        dca_amount, dca_freq, strategy_amount = 0, 1, 0
         if inv_mode == "定期定額 (DCA)":
             dc1, dc2 = st.columns(2)
-            dca_amount = dc1.number_input("每次投入 ($)", min_value=100,
-                max_value=1_000_000, value=3_000, step=500, format="%d")
+            dca_amount = dc1.number_input("每月定期定額（直接買股）",
+                min_value=0, max_value=1_000_000, value=3_000, step=500,
+                format="%d", key="w_dca_amount",
+                help="每月固定買入股票，不管信號，長期累積部位。")
             dca_freq = dc2.selectbox("每月投入次數", [1, 2, 4],
                 format_func=lambda x: {1: "1次（月投）", 2: "2次（雙週投）", 4: "4次（週投）"}[x],
-                help="1次=每月初投入一次；2次=每兩週投入一次；4次=每週投入一次")
-            # 估算總投入
-            total_est = initial_capital + dca_amount * dca_freq * 12 * years_back
-            st.info(f"💡 預估總投入：{_symbol}{total_est:,.0f}　（初始 {_symbol}{initial_capital:,} + {_symbol}{dca_amount:,} × {dca_freq}次/月 × {years_back}年）")
+                help="1次=每月初；2次=每兩週；4次=每週")
+
+            strategy_amount = st.number_input(
+                "每月策略資金池（等信號才買）",
+                min_value=0, max_value=1_000_000, value=2_000, step=500,
+                format="%d", key="w_strategy_amount",
+                help="每月注入「等待信號」的資金池。買入信號觸發才進場，賣出後資金也回到此池，下次信號再用。")
+
+            # 預估總投入
+            monthly_total = dca_amount * dca_freq + strategy_amount
+            total_est = initial_capital + monthly_total * 12 * years_back
+            st.info(
+                f"💡 預估總投入：{_symbol}{total_est:,.0f}　"
+                f"（初始 {_symbol}{initial_capital:,} ＋ 每月 {_symbol}{dca_amount:,}（DCA）＋ {_symbol}{strategy_amount:,}（策略池）× {years_back}年）"
+            )
 
         # ── 每次買入倉位 ──
         st.markdown("### 🎚️ 倉位控制")
@@ -337,10 +352,10 @@ def main():
             ["全倉買入", "固定金額", "固定比例 %"],
             key="w_buy_mode",
             help="每次觸發買入信號時，要用多少資金進場。")
-        buy_amount, buy_pct = initial_capital, 1.0
+        buy_amount, buy_pct = max(initial_capital, 10_000), 1.0
         if buy_mode_label == "固定金額":
             buy_amount = st.number_input("每次買入金額 ($)", min_value=100,
-                max_value=10_000_000, value=min(10_000, initial_capital), step=1_000, format="%d", key="w_buy_amount")
+                max_value=10_000_000, value=max(min(10_000, initial_capital), 1_000), step=1_000, format="%d", key="w_buy_amount")
         elif buy_mode_label == "固定比例 %":
             buy_pct = st.slider("買入比例", 5, 100, 100, step=5,
                 format="%d%%", key="w_buy_pct", help="佔當前可用資金的百分比") / 100
@@ -369,10 +384,11 @@ def main():
 
         # 彙整投資設定
         inv_cfg = {
-            "initial":     initial_capital,
-            "mode":        "dca" if inv_mode == "定期定額 (DCA)" else "lump_sum",
-            "dca_amount":  dca_amount,
-            "dca_freq":    dca_freq,
+            "initial":          initial_capital,
+            "mode":             "dca" if inv_mode == "定期定額 (DCA)" else "lump_sum",
+            "dca_amount":       dca_amount,
+            "dca_freq":         dca_freq,
+            "strategy_amount":  strategy_amount,
             "buy_mode":    {"全倉買入": "all_in", "固定金額": "fixed_amount", "固定比例 %": "fixed_pct"}[buy_mode_label],
             "buy_amount":  buy_amount,
             "buy_pct":     buy_pct,

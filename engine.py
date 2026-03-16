@@ -514,7 +514,12 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
     sell_mode   = inv_cfg.get("sell_mode", "all_out")
     sell_amount = float(inv_cfg.get("sell_amount", 0))
     sell_pct    = float(inv_cfg.get("sell_pct", 1.0))
-    commission  = float(inv_cfg.get("commission", 0.0))   # 單邊交易成本比例
+    commission       = float(inv_cfg.get("commission", 0.0))
+    # 每月注入信號現金池的金額：
+    #   有設定 strategy_amount → 用 Y
+    #   沒設定（=0）           → 預設用 X（dca_amount）
+    _strat_raw      = float(inv_cfg.get("strategy_amount", 0))
+    signal_pool_amt = _strat_raw if _strat_raw > 0 else dca_amount
 
     dca_dates   = _build_dca_dates(df.index, dca_amount, dca_freq, mode)
     first_price = float(c.iloc[0])
@@ -522,18 +527,19 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
     ts_mode     = (ts_cfg or {}).get("mode", "pct")
     ts_value    = float((ts_cfg or {}).get("value", 0.1))
 
-    # ── acc1：初始全買 + 每月X→現金池 + 信號換手 ──
-    a1_shares   = initial / first_price
-    a1_cash     = 0.0        # 信號現金池（每月X注入，信號買/賣）
-    a1_invested = initial    # 追蹤總投入（含月注入）
-    a1_signal_invested = 0.0 # 現金池累計注入
 
-    # ── acc2：初始全買 + 每月X→直接買股 + 每月X→現金池 + 信號換手 ──
-    a2_shares   = initial / first_price
-    a2_cash     = 0.0        # 信號現金池（每月X注入，信號買/賣）
+    # ── acc1：初始全買 + 每月 signal_pool_amt → 信號現金池（信號才買/賣）──
+    a1_shares   = initial / first_price if initial > 0 else 0.0
+    a1_cash     = 0.0
+    a1_invested = initial
+    a1_signal_invested = 0.0
+
+    # ── acc2：初始全買 + 每月 dca_amount 直接買股 + signal_pool_amt → 信號現金池 ──
+    a2_shares   = initial / first_price if initial > 0 else 0.0
+    a2_cash     = 0.0
     a2_invested = initial
-    a2_dca_shares_invested = 0.0   # DCA 直接買股的累計金額
-    a2_signal_invested     = 0.0   # 現金池累計注入
+    a2_dca_shares_invested = 0.0
+    a2_signal_invested     = 0.0
 
     # Trailing Stop 追蹤（各帳戶獨立）
     a1_trail_high = 0.0   # acc1 持倉期間最高價
@@ -573,18 +579,22 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
         price  = float(c.iloc[i])
         signal = int(row["Signal"])
 
-        if mode == "dca" and dca_amount > 0 and idx in dca_dates:
-            # acc1：每月 X 注入現金池（不買股，等信號）
-            a1_cash     += dca_amount
-            a1_invested += dca_amount
-            a1_signal_invested += dca_amount
+        if mode == "dca" and idx in dca_dates:
+            # acc1：每月 signal_pool_amt → 信號現金池（X 或 Y）
+            if signal_pool_amt > 0:
+                a1_cash            += signal_pool_amt
+                a1_invested        += signal_pool_amt
+                a1_signal_invested += signal_pool_amt
 
-            # acc2：每月 X 直接買股（DCA），另外 X 注入現金池
-            a2_shares   += dca_amount / (price * (1 + commission))   # DCA 直接買（含手續費）
-            a2_cash     += dca_amount                  # 現金池也注入 X
-            a2_invested += dca_amount * 2              # 兩筆都計入投入
-            a2_dca_shares_invested += dca_amount
-            a2_signal_invested     += dca_amount
+            # acc2：每月 dca_amount 直接買股 + signal_pool_amt → 信號現金池
+            if dca_amount > 0:
+                a2_shares              += dca_amount / (price * (1 + commission))
+                a2_invested            += dca_amount
+                a2_dca_shares_invested += dca_amount
+            if signal_pool_amt > 0:
+                a2_cash            += signal_pool_amt
+                a2_invested        += signal_pool_amt
+                a2_signal_invested += signal_pool_amt
 
             dca_buy_dates.append(idx)
             dca_buy_prices.append(price)
@@ -661,8 +671,10 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
     years    = (df.index[-1] - df.index[0]).days / 365.25
 
     def perf(final, inv):
-        tr   = (final - inv) / inv
-        cagr = (final / inv) ** (1 / max(years, 0.01)) - 1
+        # initial=0 時，以最終資產值計算（回報率視為全由 DCA 累積）
+        base = inv if inv > 0 else max(final, 1.0)
+        tr   = (final - inv) / base
+        cagr = (final / base) ** (1 / max(years, 0.01)) - 1
         return tr, cagr
 
     a1_ps = pd.Series(a1_vals, index=df.index)
@@ -702,35 +714,39 @@ def run_backtest(df: pd.DataFrame, inv_cfg: dict, ts_cfg: dict | None = None) ->
 
 def compute_benchmark(df: pd.DataFrame, inv_cfg: dict) -> dict:
     """
-    acc3: 初始全買 + 每月 2X 直接買股（B&H，永不賣）
-          對應 acc2 的總投入（DCA部分X + 信號池部分X = 2X）
-    acc4: 初始全買，永不動（純B&H基準）
+    acc3: B&H + DCA
+          預設每月 2X（對應 acc2 的 X直接買股 + X信號池）
+          若有設定 strategy_amount(Y)，則每月 X + Y
+    acc4: 純 B&H，初始全買，永不動
     """
     c          = df["Close"].squeeze()
     initial    = float(inv_cfg["initial"])
     mode       = inv_cfg.get("mode", "lump_sum")
     dca_amount = float(inv_cfg.get("dca_amount", 0))
     dca_freq   = inv_cfg.get("dca_freq", 1)
+    _strat_raw = float(inv_cfg.get("strategy_amount", 0))
+    # acc3 每月買股金額 = X + Y（有Y）或 2X（無Y）
+    acc3_monthly = dca_amount + (_strat_raw if _strat_raw > 0 else dca_amount)
 
     dca_dates = _build_dca_dates(df.index, dca_amount, dca_freq, mode)
 
-    # acc4：純 B&H（永遠持有初始股票）
-    a4_shares   = initial / float(c.iloc[0])
+    # acc4：純 B&H
+    a4_shares   = initial / float(c.iloc[0]) if initial > 0 else 0.0
     a4_invested = initial
 
-    # acc3：B&H + 每月 2X（對應 acc2 的相同總資金）
-    a3_shares   = initial / float(c.iloc[0])
+    # acc3：B&H + DCA（每月 acc3_monthly 直接買股）
+    a3_shares   = initial / float(c.iloc[0]) if initial > 0 else 0.0
     a3_invested = initial
 
-    a3_vals, a4_vals     = [], []
+    a3_vals, a4_vals         = [], []
     a3_inv_vals, a4_inv_vals = [], []
 
     for i, idx in enumerate(df.index):
         price = float(c.iloc[i])
-        if mode == "dca" and dca_amount > 0 and idx in dca_dates:
+        if mode == "dca" and acc3_monthly > 0 and idx in dca_dates:
             comm = float(inv_cfg.get("commission", 0.0))
-            a3_shares   += (dca_amount * 2) / (price * (1 + comm))
-            a3_invested += dca_amount * 2
+            a3_shares   += acc3_monthly / (price * (1 + comm))
+            a3_invested += acc3_monthly
         a3_vals.append(a3_shares * price)
         a4_vals.append(a4_shares * price)
         a3_inv_vals.append(a3_invested)
