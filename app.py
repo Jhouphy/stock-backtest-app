@@ -11,6 +11,7 @@ from engine import (
     plot_equity, plot_candlestick,
 )
 from portfolio import render_portfolio_tab
+from retirement import render_retirement_tab
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -509,10 +510,17 @@ def main():
 
 
     # ── 主分頁（sidebar 在兩個 Tab 共用）──
-    main_tab1, main_tab2 = st.tabs(["🎯 單一標的策略回測", "💼 資產配置組合分析"])
+    main_tab1, main_tab2, main_tab3 = st.tabs([
+        "🎯 單一標的策略回測",
+        "💼 資產配置組合分析",
+        "🏖️ 退休規劃計算器",
+    ])
 
     with main_tab2:
         render_portfolio_tab()
+
+    with main_tab3:
+        render_retirement_tab()
 
     with main_tab1:
         if not run_btn:
