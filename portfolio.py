@@ -636,16 +636,13 @@ def render_portfolio_tab():
         st.markdown("**📋 標的與權重設定**")
         st.caption("每行輸入一個標的代號與配置比例（%）。台股格式：2330.TW；現金請輸入 CASH。")
 
-        # 預設 5 個標的
+        # 預設 2 個標的
         defaults = [
-            ("VOO",     40),
-            ("QQQ",     20),
-            ("GLD",     15),
-            ("TLT",     15),
-            ("CASH",    10),
+            ("VOO", 50),
+            ("QQQ", 50),
         ]
         n_assets = st.number_input("標的數量", min_value=2, max_value=10,
-                                   value=5, step=1)
+                                   value=2, step=1)
 
         tickers_input = []
         weights_input = []

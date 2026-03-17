@@ -219,7 +219,7 @@ def render_retirement_tab():
 
     with st.expander("⚙️ 基本設定", expanded=True):
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        age_start   = r1c1.number_input("目前年齡", 18, 80, 25, 1)
+        age_start   = r1c1.number_input("目前年齡", 18, 80, 30, 1)
         year_start  = r1c2.number_input("起始年份", 2000, 2100, 2026, 1)
         currency    = r1c3.selectbox("計價貨幣", ["USD ($)", "TWD (NT$)", "JPY (¥)", "EUR (€)"])
         years       = r1c4.selectbox("試算年數", [30, 40, 50, 60, 70], index=2)
@@ -229,9 +229,9 @@ def render_retirement_tab():
         st.markdown("---")
         r2c1, r2c2, r2c3 = st.columns(3)
         initial       = r2c1.number_input(
-            f"初始投資 ({csym})", 0, 1_000_000_000, 5_900_000, 100_000, format="%d")
+            f"初始投資 ({csym})", 0, 1_000_000_000, 0, 100_000, format="%d")
         monthly_contrib = r2c2.number_input(
-            f"每月投入 ({csym})", 0, 10_000_000, 50_000, 1_000, format="%d")
+            f"每月投入 ({csym})", 0, 10_000_000, 0, 1_000, format="%d")
         contrib_stop_age = r2c3.number_input(
             "幾歲停止投入（0=持續至財務自由）", 0, 100, 0, 1,
             help="設 0 表示持續投入直到達到財務自由為止")
@@ -239,18 +239,18 @@ def render_retirement_tab():
         st.markdown("---")
         r3c1, r3c2, r3c3 = st.columns(3)
         annual_return_pct = r3c1.slider(
-            "預估年化報酬率", 0.0, 20.0, 8.0, 0.5, format="%.1f%%")
+            "預估年化報酬率", 0.0, 20.0, 0.0, 0.5, format="%.1f%%")
         inflation_pct = r3c2.slider(
-            "通貨膨脹率 / 年", 0.0, 10.0, 2.0, 0.5, format="%.1f%%")
+            "通貨膨脹率 / 年", 0.0, 10.0, 0.0, 0.5, format="%.1f%%")
         withdrawal_pct = r3c3.slider(
-            "提領率（4% 法則）", 1.0, 10.0, 4.0, 0.5, format="%.1f%%",
+            "提領率（4% 法則）", 1.0, 10.0, 1.0, 0.5, format="%.1f%%",
             help="財務自由後每年從資產中提領的比例。4% 為常見標準（三十年不耗盡）。")
 
         st.markdown("---")
         st.markdown("**🏠 生活開銷設定**")
         exp_c1, exp_c2 = st.columns(2)
         monthly_expense = exp_c1.number_input(
-            f"月生活開銷 ({csym})（現值）", 0, 10_000_000, 40_000, 1_000, format="%d",
+            f"月生活開銷 ({csym})（現值）", 0, 10_000_000, 0, 1_000, format="%d",
             help="目前每月的生活開銷，計算時會按通膨率逐年調整。")
 
         # 連動：計算財務自由所需資產（月支出反推目標資產）
