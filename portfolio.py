@@ -64,25 +64,35 @@ def fetch_fx_rate(base_currency: str, start: str, end: str) -> pd.Series | None:
 @st.cache_data(ttl=3600)
 def fetch_portfolio_data(tickers: list[str], start: str, end: str) -> pd.DataFrame:
     """
-    同時下載多個標的的收盤價，對齊到共同交易日（取交集）。
-    回傳 DataFrame，columns = tickers，index = 日期。
+    同時下載多個標的的收盤價。
+    美股與台股交易日不同，改用各自下載再 ffill 對齊，避免 dropna 刪掉大量資料。
     """
     if not tickers:
         return pd.DataFrame()
-    try:
-        raw = yf.download(tickers, start=start, end=end,
-                          progress=False, auto_adjust=True)
-        if raw.empty:
-            return pd.DataFrame()
-        if len(tickers) == 1:
-            close = raw[["Close"]].rename(columns={"Close": tickers[0]})
-        else:
-            close = raw["Close"]
-            if isinstance(close.columns, pd.Index):
-                close = close[tickers]   # 保持順序
-        return close.dropna()
-    except Exception:
+
+    frames = {}
+    for t in tickers:
+        try:
+            raw = yf.download(t, start=start, end=end,
+                              progress=False, auto_adjust=True)
+            if raw.empty:
+                continue
+            s = raw["Close"].squeeze()
+            if isinstance(s, pd.DataFrame):
+                s = s.iloc[:, 0]
+            s.name = t
+            frames[t] = s
+        except Exception:
+            continue
+
+    if not frames:
         return pd.DataFrame()
+
+    # 以聯集日期對齊，前向填充補休市缺口，再刪掉初始全空列
+    df = pd.DataFrame(frames)
+    df = df.ffill().bfill()
+    df = df.dropna(how="all")
+    return df
 
 
 
