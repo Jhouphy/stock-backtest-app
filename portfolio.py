@@ -260,6 +260,7 @@ def run_portfolio_backtest(
     # 逐日計算組合價值
     portfolio_vals  = []
     rebal_dates_hit = []
+    asset_vals_dict = {t: [] for t in tickers}   # 各資產逐日市值
 
     _dca_dates = dca_dates or set()
 
@@ -305,6 +306,8 @@ def run_portfolio_backtest(
 
         val = sum(shares[t] * float(row[t]) for t in tickers)
         portfolio_vals.append(val)
+        for t in tickers:
+            asset_vals_dict[t].append(shares[t] * float(row[t]))
 
     port_series = pd.Series(portfolio_vals, index=dates)
     final_val   = float(port_series.iloc[-1])
@@ -320,8 +323,12 @@ def run_portfolio_backtest(
     ann_vol  = float(daily_r.std() * np.sqrt(252)) if len(daily_r) > 5 else 0.0
     sharpe   = (cagr - 0.04) / ann_vol if ann_vol > 0.001 else 0
 
+    asset_series = {
+        t: pd.Series(asset_vals_dict[t], index=dates) for t in tickers
+    }
     return {
         "series":         port_series,
+        "asset_series":   asset_series,
         "final":          final_val,
         "total_invested": total_invested,
         "total_ret":      total_ret,
@@ -403,29 +410,22 @@ def plot_portfolio_equity(
     base_currency: str,
     currency_symbol: str,
 ) -> go.Figure:
-    """組合資產曲線 + 各資產個別曲線。"""
+    """組合資產曲線 + 各資產實際持倉市值曲線。"""
     fig = go.Figure()
 
-    # 各資產正規化曲線
-    # initial>0：以 initial 為基準
-    # initial=0：以組合第一個非零值為基準，與組合曲線同量級
-    _port_nonzero = port_result["series"][port_result["series"] > 0]
-    _base = initial if initial > 0 else (
-        float(_port_nonzero.iloc[0]) if not _port_nonzero.empty else 100.0
-    )
+    # 各資產「實際持倉市值」曲線（已含 DCA 累積的股數）
     colors = px.colors.qualitative.Set2
+    asset_series = port_result.get("asset_series", {})
     for i, col in enumerate(asset_prices.columns):
-        s = asset_prices[col].dropna()
-        if s.empty or float(s.iloc[0]) == 0:
+        if col not in asset_series:
             continue
-        # 對齊起始點：從組合第一個非零日開始
-        if not _port_nonzero.empty:
-            s = s[s.index >= _port_nonzero.index[0]]
-        if s.empty:
+        s = asset_series[col]
+        # 過濾掉前期全零（DCA 還沒開始）
+        s_nonzero = s[s > 0]
+        if s_nonzero.empty:
             continue
-        normed = s / float(s.iloc[0]) * _base
         fig.add_trace(go.Scatter(
-            x=normed.index, y=normed.values,
+            x=s.index, y=s.values,
             name=f"{col} ({weights.get(col, 0)*100:.0f}%)",
             line=dict(color=colors[i % len(colors)], width=1.2, dash="dot"),
             opacity=0.7,
