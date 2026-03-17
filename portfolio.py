@@ -191,10 +191,13 @@ def run_portfolio_backtest(
     commission: float = 0.0,    # 單邊手續費比例（買入+賣出各扣一次）
     div_tax: float = 0.0,       # 股息預扣稅率（台灣居民投資美股：0.30）
     dividends: pd.DataFrame | None = None,  # fetch_dividends 取得的股息資料
+    dca_amount: float = 0.0,    # 每次定期定額投入金額（0 = 不啟用）
+    dca_dates: set | None = None,  # 預先計算好的 DCA 日期集合
 ) -> dict:
     """
     組合回測引擎。
-    - 第一天依權重買入（扣手續費）
+    - 第一天依權重買入（扣手續費；initial=0 時跳過）
+    - 每個 DCA 日依權重追加買入（扣手續費）
     - 依 rebalance_freq 定期再平衡（買賣各扣手續費）
     - "CASH" 作為虛擬標的，每日以 cash_return/252 複利增長
     - 配息日：股息金額 × (1 - div_tax) 加回現金池，超過的稅金從組合扣除
@@ -218,15 +221,16 @@ def run_portfolio_backtest(
     total_w = sum(weights.values())
     w = {t: weights[t] / total_w for t in tickers if t in weights}
 
-    # 初始持股（第一天收盤價買入，扣手續費：買入成本 × (1+commission)）
+    # 初始持股（第一天收盤價買入；initial=0 時從零開始靠 DCA 累積）
     first_prices = prices.iloc[0]
-    shares = {
-        t: initial * w.get(t, 0) / (float(first_prices[t]) * (1 + commission))
-        for t in tickers
-    }
-    total_commission_paid = sum(
-        initial * w.get(t, 0) * commission for t in tickers
-    )
+    if initial > 0:
+        shares = {
+            t: initial * w.get(t, 0) / (float(first_prices[t]) * (1 + commission))
+            for t in tickers
+        }
+    else:
+        shares = {t: 0.0 for t in tickers}
+    total_invested = initial
 
     # 再平衡日期計算
     rebal_dates = set()
@@ -247,7 +251,18 @@ def run_portfolio_backtest(
     portfolio_vals  = []
     rebal_dates_hit = []
 
+    _dca_dates = dca_dates or set()
+
     for i, (date, row) in enumerate(prices.iterrows()):
+        # ── DCA 定期定額買入 ──
+        if dca_amount > 0 and date in _dca_dates and i > 0:
+            for t in tickers:
+                amt = dca_amount * w.get(t, 0)
+                eff_price = float(row[t]) * (1 + commission)
+                if eff_price > 0:
+                    shares[t] += amt / eff_price
+            total_invested += dca_amount
+
         # 再平衡
         if date in rebal_dates and i > 0:
             total_val = sum(shares[t] * float(row[t]) for t in tickers)
@@ -284,8 +299,9 @@ def run_portfolio_backtest(
     port_series = pd.Series(portfolio_vals, index=dates)
     final_val   = float(port_series.iloc[-1])
     years       = (dates[-1] - dates[0]).days / 365.25
-    total_ret   = (final_val - initial) / initial
-    cagr        = (final_val / initial) ** (1 / max(years, 0.1)) - 1
+    base        = total_invested if total_invested > 0 else max(final_val, 1.0)
+    total_ret   = (final_val - total_invested) / base
+    cagr        = (final_val / base) ** (1 / max(years, 0.1)) - 1
     dd_series   = port_series / port_series.cummax() - 1
     max_dd      = float(dd_series.min())
     daily_r     = port_series.pct_change().dropna()
@@ -483,20 +499,51 @@ def render_portfolio_tab():
     # ──────────────────────────────────────────
     with st.expander("⚙️ 組合設定", expanded=True):
 
-        # 基準貨幣 + 初始資金 + 年數
-        cfg1, cfg2, cfg3 = st.columns(3)
+        # 基準貨幣 + 年數
+        cfg1, cfg2 = st.columns(2)
         base_currency = cfg1.selectbox(
             "基準貨幣",
             ["USD", "TWD", "JPY", "EUR", "HKD"],
             help="所有標的的價格與組合價值都將換算為此貨幣後計算。"
         )
         currency_symbol = CURRENCY_SYMBOLS.get(base_currency, "$")
-        initial = cfg2.number_input(
-            f"初始資金 ({base_currency})",
-            min_value=1000, max_value=100_000_000,
+        years_back = cfg2.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20], index=4)
+
+        # 初始資金（可為 0）
+        initial = st.number_input(
+            f"初始資金 ({base_currency})　（可設為 0，純靠定期定額累積）",
+            min_value=0, max_value=100_000_000,
             value=1_000_000, step=100_000, format="%d"
         )
-        years_back = cfg3.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20], index=4)
+
+        # DCA 定期定額設定
+        st.markdown("**📅 定期定額設定（可選）**")
+        dca1, dca2, dca3 = st.columns(3)
+        port_dca_enable = dca1.toggle(
+            "啟用定期定額",
+            value=False,
+            help="每期依設定金額，按當前權重比例追加買入各標的。"
+        )
+        if port_dca_enable:
+            port_dca_amount = dca2.number_input(
+                f"每次投入金額 ({base_currency})",
+                min_value=100, max_value=10_000_000,
+                value=30_000, step=1_000, format="%d"
+            )
+            port_dca_freq = dca3.selectbox(
+                "每月投入次數",
+                [1, 2, 4],
+                format_func=lambda x: {1:"1次（月投）", 2:"2次（雙週投）", 4:"4次（週投）"}[x],
+                help="1次=每月初，2次=每兩週，4次=每週"
+            )
+            total_dca_est = initial + port_dca_amount * port_dca_freq * 12 * years_back
+            st.caption(
+                f"💡 預估總投入：{currency_symbol}{total_dca_est:,.0f}"
+                f"（初始 {currency_symbol}{initial:,} ＋ 每月 {currency_symbol}{port_dca_amount*port_dca_freq:,} × {years_back}年）"
+            )
+        else:
+            port_dca_amount = 0
+            port_dca_freq   = 1
         end_dt     = datetime.today()
         start_dt   = end_dt.replace(year=end_dt.year - years_back)
         start_str  = start_dt.strftime("%Y-%m-%d")
@@ -670,6 +717,18 @@ def render_portfolio_tab():
             with st.spinner("下載股息資料..."):
                 dividends_df = fetch_dividends(us_tickers, common_start, common_end)
 
+    # 建立 DCA 日期集合
+    port_dca_date_set = set()
+    if port_dca_enable and port_dca_amount > 0:
+        freq_map = {1: "MS", 2: "SMS", 4: "W-MON"}
+        freq_str = freq_map.get(port_dca_freq, "MS")
+        try:
+            port_dca_date_set = set(
+                pd.date_range(common_start, common_end, freq=freq_str).normalize()
+            )
+        except Exception:
+            port_dca_date_set = set()
+
     with st.spinner("計算組合績效..."):
         port_result = run_portfolio_backtest(
             prices_final, weights_final, initial,
@@ -677,6 +736,8 @@ def render_portfolio_tab():
             commission   = commission_pct / 100,
             div_tax      = div_tax_rate,
             dividends    = dividends_df,
+            dca_amount   = port_dca_amount if port_dca_enable else 0.0,
+            dca_dates    = port_dca_date_set,
         )
         asset_stats = calc_asset_stats(prices_final, initial)
 
@@ -698,8 +759,10 @@ def render_portfolio_tab():
         cost_notes.append(f"手續費 {commission_pct:.2f}%/單邊")
     if enable_div_tax and div_tax_rate > 0:
         cost_notes.append(f"股息預扣稅 {div_tax_rate*100:.0f}%")
+    if port_dca_enable and port_dca_amount > 0:
+        cost_notes.append(f"DCA {currency_symbol}{port_dca_amount:,}/次 × {port_dca_freq}次/月")
     if cost_notes:
-        st.caption(f"💸 已套用交易成本：{' ｜ '.join(cost_notes)}")
+        st.caption(f"💸 已套用設定：{' ｜ '.join(cost_notes)}")
 
     # ──────────────────────────────────────────
     # 圖表分頁
@@ -786,6 +849,8 @@ def render_portfolio_tab():
                         commission = commission_pct / 100,
                         div_tax    = div_tax_rate,
                         dividends  = dividends_df,
+                        dca_amount = port_dca_amount if port_dca_enable else 0.0,
+                        dca_dates  = port_dca_date_set,
                     )
                 delta_cagr = port_result["cagr"] - no_rebal["cagr"]
                 delta_dd   = port_result["max_dd"] - no_rebal["max_dd"]
