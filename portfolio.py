@@ -314,20 +314,23 @@ def run_portfolio_backtest(
     cagr        = (final_val / base) ** (1 / max(years, 0.1)) - 1
     dd_series   = port_series / port_series.cummax() - 1
     max_dd      = float(dd_series.min())
-    daily_r     = port_series.pct_change().dropna()
-    ann_vol     = float(daily_r.std() * np.sqrt(252))
-    sharpe      = (cagr - 0.04) / ann_vol if ann_vol > 0.001 else 0
+    # 只取 portfolio>0 的部分計算波動率（initial=0 時前期為零，排除）
+    valid_series = port_series[port_series > 0]
+    daily_r  = valid_series.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
+    ann_vol  = float(daily_r.std() * np.sqrt(252)) if len(daily_r) > 5 else 0.0
+    sharpe   = (cagr - 0.04) / ann_vol if ann_vol > 0.001 else 0
 
     return {
-        "series":       port_series,
-        "final":        final_val,
-        "total_ret":    total_ret,
-        "cagr":         cagr,
-        "max_dd":       max_dd,
-        "ann_vol":      ann_vol,
-        "sharpe":       sharpe,
-        "dd_series":    dd_series,
-        "rebal_dates":  rebal_dates_hit,
+        "series":         port_series,
+        "final":          final_val,
+        "total_invested": total_invested,
+        "total_ret":      total_ret,
+        "cagr":           cagr,
+        "max_dd":         max_dd,
+        "ann_vol":        ann_vol,
+        "sharpe":         sharpe,
+        "dd_series":      dd_series,
+        "rebal_dates":    rebal_dates_hit,
     }
 
 
@@ -403,16 +406,23 @@ def plot_portfolio_equity(
     """組合資產曲線 + 各資產個別曲線。"""
     fig = go.Figure()
 
-    # 各資產正規化曲線（第一天 = initial）
+    # 各資產正規化曲線
+    # initial>0：以 initial 為基準；initial=0：以 100 為基準顯示成長倍數
+    _base = initial if initial > 0 else 100.0
     colors = px.colors.qualitative.Set2
     for i, col in enumerate(asset_prices.columns):
         s = asset_prices[col].dropna()
-        normed = s / float(s.iloc[0]) * initial
+        if s.empty or float(s.iloc[0]) == 0:
+            continue
+        normed = s / float(s.iloc[0]) * _base
         fig.add_trace(go.Scatter(
             x=normed.index, y=normed.values,
             name=f"{col} ({weights.get(col, 0)*100:.0f}%)",
             line=dict(color=colors[i % len(colors)], width=1.2, dash="dot"),
-            opacity=0.6,
+            opacity=0.7,
+            hovertemplate=f"{col}: {currency_symbol}%{{y:,.0f}}<extra></extra>"
+                if initial > 0 else
+                f"{col}: %{{y:.1f}}<extra></extra>",
         ))
 
     # 組合主線
@@ -433,7 +443,8 @@ def plot_portfolio_equity(
                    font=dict(size=13, color="#0f172a")),
         xaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"]),
         yaxis=dict(showgrid=True, gridcolor=CHART["gridcolor"],
-                   tickprefix=currency_symbol),
+                   tickprefix=currency_symbol,
+                   tickformat=",.0f"),
         paper_bgcolor=CHART["paper_bgcolor"],
         plot_bgcolor=CHART["plot_bgcolor"],
         font=CHART["font"],
@@ -756,12 +767,24 @@ def render_portfolio_tab():
     # ──────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📊 組合績效摘要")
+    _final    = port_result["final"]
+    _invested = port_result.get("total_invested", initial)
+    _gain     = _final - _invested
     m1, m2, m3, m4, m5 = st.columns(5)
-    m1.metric("總報酬",       f"{port_result['total_ret']:+.2%}")
+    m1.metric("總報酬",
+              f"{port_result['total_ret']:+.2%}",
+              delta=f"{currency_symbol}{_gain:+,.0f}")
     m2.metric("年化報酬 CAGR", f"{port_result['cagr']:+.2%}")
     m3.metric("最大回撤",      f"{port_result['max_dd']:.2%}")
-    m4.metric("年化波動率",    f"{port_result['ann_vol']:.2%}")
-    m5.metric("夏普比率",      f"{port_result['sharpe']:.3f}")
+    m4.metric("年化波動率",    f"{port_result['ann_vol']:.2%}"
+                               if not np.isnan(port_result['ann_vol']) else "—")
+    m5.metric("夏普比率",      f"{port_result['sharpe']:.3f}"
+                               if not np.isnan(port_result['sharpe']) else "—")
+    st.caption(
+        f"📌 總投入：{currency_symbol}{_invested:,.0f}　"
+        f"最終資產：{currency_symbol}{_final:,.0f}　"
+        f"損益：{currency_symbol}{_gain:+,.0f}"
+    )
     if port_result["rebal_dates"]:
         st.caption(f"🔄 共執行 {len(port_result['rebal_dates'])} 次再平衡（圖中橘色虛線標示）")
     cost_notes = []
