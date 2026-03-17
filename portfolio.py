@@ -407,12 +407,21 @@ def plot_portfolio_equity(
     fig = go.Figure()
 
     # 各資產正規化曲線
-    # initial>0：以 initial 為基準；initial=0：以 100 為基準顯示成長倍數
-    _base = initial if initial > 0 else 100.0
+    # initial>0：以 initial 為基準
+    # initial=0：以組合第一個非零值為基準，與組合曲線同量級
+    _port_nonzero = port_result["series"][port_result["series"] > 0]
+    _base = initial if initial > 0 else (
+        float(_port_nonzero.iloc[0]) if not _port_nonzero.empty else 100.0
+    )
     colors = px.colors.qualitative.Set2
     for i, col in enumerate(asset_prices.columns):
         s = asset_prices[col].dropna()
         if s.empty or float(s.iloc[0]) == 0:
+            continue
+        # 對齊起始點：從組合第一個非零日開始
+        if not _port_nonzero.empty:
+            s = s[s.index >= _port_nonzero.index[0]]
+        if s.empty:
             continue
         normed = s / float(s.iloc[0]) * _base
         fig.add_trace(go.Scatter(
@@ -420,9 +429,7 @@ def plot_portfolio_equity(
             name=f"{col} ({weights.get(col, 0)*100:.0f}%)",
             line=dict(color=colors[i % len(colors)], width=1.2, dash="dot"),
             opacity=0.7,
-            hovertemplate=f"{col}: {currency_symbol}%{{y:,.0f}}<extra></extra>"
-                if initial > 0 else
-                f"{col}: %{{y:.1f}}<extra></extra>",
+            hovertemplate=f"{col}: {currency_symbol}%{{y:,.0f}}<extra></extra>",
         ))
 
     # 組合主線
