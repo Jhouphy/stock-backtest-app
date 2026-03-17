@@ -260,7 +260,6 @@ def run_portfolio_backtest(
     # 逐日計算組合價值
     portfolio_vals  = []
     rebal_dates_hit = []
-    asset_vals_dict = {t: [] for t in tickers}   # 各資產逐日市值
 
     _dca_dates = dca_dates or set()
 
@@ -306,8 +305,6 @@ def run_portfolio_backtest(
 
         val = sum(shares[t] * float(row[t]) for t in tickers)
         portfolio_vals.append(val)
-        for t in tickers:
-            asset_vals_dict[t].append(shares[t] * float(row[t]))
 
     port_series = pd.Series(portfolio_vals, index=dates)
     final_val   = float(port_series.iloc[-1])
@@ -323,12 +320,8 @@ def run_portfolio_backtest(
     ann_vol  = float(daily_r.std() * np.sqrt(252)) if len(daily_r) > 5 else 0.0
     sharpe   = (cagr - 0.04) / ann_vol if ann_vol > 0.001 else 0
 
-    asset_series = {
-        t: pd.Series(asset_vals_dict[t], index=dates) for t in tickers
-    }
     return {
         "series":         port_series,
-        "asset_series":   asset_series,
         "final":          final_val,
         "total_invested": total_invested,
         "total_ret":      total_ret,
@@ -338,6 +331,9 @@ def run_portfolio_backtest(
         "sharpe":         sharpe,
         "dd_series":      dd_series,
         "rebal_dates":    rebal_dates_hit,
+        "dca_amount":     dca_amount,
+        "dca_dates":      _dca_dates,
+        "commission":     commission,
     }
 
 
@@ -413,23 +409,37 @@ def plot_portfolio_equity(
     """組合資產曲線 + 各資產實際持倉市值曲線。"""
     fig = go.Figure()
 
-    # 各資產「實際持倉市值」曲線（已含 DCA 累積的股數）
+    # 各資產虛線：假設把全部 DCA 金額只買該資產的走勢
+    # 從 port_result 取得 DCA 相關資訊
     colors = px.colors.qualitative.Set2
-    asset_series = port_result.get("asset_series", {})
+    dca_amount = port_result.get("dca_amount", 0)
+    dca_dates  = port_result.get("dca_dates",  set())
+    commission = port_result.get("commission", 0.0)
+
     for i, col in enumerate(asset_prices.columns):
-        if col not in asset_series:
+        if col == "CASH":
             continue
-        s = asset_series[col]
-        # 過濾掉前期全零（DCA 還沒開始）
-        s_nonzero = s[s > 0]
-        if s_nonzero.empty:
+        price_s = asset_prices[col].dropna()
+        if price_s.empty:
             continue
+
+        # 模擬「全部 X 只買此資產」
+        _shares = initial / float(price_s.iloc[0]) if initial > 0 else 0.0
+        _vals   = []
+        for date, price in price_s.items():
+            if dca_amount > 0 and date in dca_dates:
+                eff = float(price) * (1 + commission)
+                if eff > 0:
+                    _shares += dca_amount / eff
+            _vals.append(_shares * float(price))
+
+        s = pd.Series(_vals, index=price_s.index)
         fig.add_trace(go.Scatter(
             x=s.index, y=s.values,
-            name=f"{col} ({weights.get(col, 0)*100:.0f}%)",
+            name=f"{col}（全押）",
             line=dict(color=colors[i % len(colors)], width=1.2, dash="dot"),
             opacity=0.7,
-            hovertemplate=f"{col}: {currency_symbol}%{{y:,.0f}}<extra></extra>",
+            hovertemplate=f"{col}（全押）: {currency_symbol}%{{y:,.0f}}<extra></extra>",
         ))
 
     # 組合主線
