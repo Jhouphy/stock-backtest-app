@@ -295,21 +295,10 @@ def main():
         if ticker.isdigit() and not ticker.endswith(".TW"):
             st.caption(f"💡 看起來像台股代號，請改輸入 **{ticker}.TW**")
         col_y1, col_y2 = st.columns(2)
-        # 快選：點選後透過 callback 直接更新 w_years（才能覆蓋 session_state）
-        _preset_options = [1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50]
-        def _on_preset_change():
-            st.session_state["w_years"] = st.session_state["_w_years_preset"]
-        col_y1.selectbox(
-            "回測年數（快選）",
-            _preset_options,
-            key="_w_years_preset",
-            on_change=_on_preset_change,
-            help="快速選擇常用年數，或在下方直接輸入自訂年數。"
-        )
-        years_back = st.number_input(
-            "或直接輸入回測年數", min_value=1, max_value=100,
-            step=1, key="w_years",
-            help="可輸入 1～100 之間的任意整數。"
+        years_back = col_y1.slider(
+            "回測年數", min_value=1, max_value=50, step=1,
+            key="w_years",
+            help="拖曳滑軌，或點擊數字後直接鍵盤輸入（1～50 年）。"
         )
         end_date   = col_y2.date_input("截止日期", value=datetime.today())
         end_dt     = datetime.combine(end_date, datetime.min.time())
