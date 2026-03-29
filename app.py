@@ -306,7 +306,8 @@ def main():
             value=_years_preset, step=1, key="w_years",
             help="可輸入 1～100 之間的任意整數。"
         )
-        end_date   = col_y2.date_input("截止日期", value=datetime.today())        end_dt     = datetime.combine(end_date, datetime.min.time())
+        end_date   = col_y2.date_input("截止日期", value=datetime.today())
+        end_dt     = datetime.combine(end_date, datetime.min.time())
         try:
             start_dt = end_dt.replace(year=end_dt.year - years_back)
         except ValueError:
