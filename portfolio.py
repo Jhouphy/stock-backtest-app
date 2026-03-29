@@ -583,9 +583,12 @@ def render_portfolio_tab():
             help="所有標的的價格與組合價值都將換算為此貨幣後計算。"
         )
         currency_symbol = CURRENCY_SYMBOLS.get(base_currency, "$")
-        years_back = cfg2.selectbox(
-            "回測年數", [1, 2, 3, 5, 7, 10, 15, 20],
-            key="port_years_back",
+        years_back = cfg2.number_input(
+            "回測年數", 
+            min_value=1, 
+            max_value=50,    # 支援最高 50 年
+            step=1, 
+            key="port_years_back"
         )
 
         # 初始資金（可為 0）
