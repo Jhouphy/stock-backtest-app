@@ -295,9 +295,18 @@ def main():
         if ticker.isdigit() and not ticker.endswith(".TW"):
             st.caption(f"💡 看起來像台股代號，請改輸入 **{ticker}.TW**")
         col_y1, col_y2 = st.columns(2)
-        years_back = col_y1.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20, 30, 50, 100], index=3, key="w_years")
-        end_date   = col_y2.date_input("截止日期", value=datetime.today())
-        end_dt     = datetime.combine(end_date, datetime.min.time())
+        _years_preset = col_y1.selectbox(
+            "回測年數（快選）",
+            [1, 2, 3, 5, 7, 10, 15, 20, 25, 30, 40, 50],
+            index=3,
+            help="快速選擇常用年數，或在下方直接輸入自訂年數。"
+        )
+        years_back = st.number_input(
+            "或直接輸入回測年數", min_value=1, max_value=100,
+            value=_years_preset, step=1, key="w_years",
+            help="可輸入 1～100 之間的任意整數。"
+        )
+        end_date   = col_y2.date_input("截止日期", value=datetime.today())        end_dt     = datetime.combine(end_date, datetime.min.time())
         try:
             start_dt = end_dt.replace(year=end_dt.year - years_back)
         except ValueError:
