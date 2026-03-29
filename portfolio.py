@@ -11,6 +11,7 @@ import plotly.express as px
 import streamlit as st
 import yfinance as yf
 from datetime import datetime, timedelta
+from settings import init_session, save_settings
 
 # ─── 共用圖表樣式（與 app.py 一致）───
 CHART = dict(
@@ -529,6 +530,9 @@ CURRENCY_SYMBOLS = {"USD": "$", "TWD": "NT$", "JPY": "¥", "EUR": "€", "HKD": 
 
 def render_portfolio_tab():
     """資產配置分析頁面，完整 UI + 計算邏輯。"""
+    # ── 初始化：第一次載入時從 JSON 注入 session_state ──
+    init_session("portfolio", st.session_state)
+
     st.markdown("### 💼 多標的資產配置分析")
     st.caption("輸入 2~10 個標的與配置比例，分析組合績效、相關性與再平衡效益。")
 
@@ -537,21 +541,59 @@ def render_portfolio_tab():
     # ──────────────────────────────────────────
     with st.expander("⚙️ 組合設定", expanded=True):
 
+        # ── 儲存 / 載入提示列 ──
+        save_col, status_col = st.columns([1, 3])
+        if save_col.button("💾 儲存目前設定", key="port_save_btn",
+                           help="將目前所有設定存至本機 app_settings.json，下次開啟自動載入。"):
+            n = int(st.session_state.get("port_n_assets", 2))
+            _data = {
+                "port_base_currency":   st.session_state.get("port_base_currency", "USD"),
+                "port_years_back":      st.session_state.get("port_years_back", 7),
+                "port_initial":         st.session_state.get("port_initial", 1_000_000),
+                "port_dca_enable":      st.session_state.get("port_dca_enable", False),
+                "port_dca_amount":      st.session_state.get("port_dca_amount", 30_000),
+                "port_dca_freq":        st.session_state.get("port_dca_freq", 1),
+                "port_rebalance_freq":  st.session_state.get("port_rebalance_freq", "quarterly"),
+                "port_cash_return_pct": st.session_state.get("port_cash_return_pct", 4.0),
+                "port_commission_pct":  st.session_state.get("port_commission_pct", 0.1),
+                "port_enable_div_tax":  st.session_state.get("port_enable_div_tax", False),
+                "port_div_tax_rate":    st.session_state.get("port_div_tax_rate", 30),
+                "port_n_assets":        n,
+                "port_tickers":         [st.session_state.get(f"pt_{i}", "") for i in range(n)],
+                "port_weights":         [st.session_state.get(f"pw_{i}", 0) for i in range(n)],
+            }
+            if save_settings("portfolio", _data):
+                st.session_state["_port_save_ok"] = True
+            else:
+                st.session_state["_port_save_ok"] = False
+
+        if st.session_state.get("_port_save_ok") is True:
+            status_col.success("✅ 設定已儲存！下次開啟 App 將自動載入。", icon="💾")
+        elif st.session_state.get("_port_save_ok") is False:
+            status_col.error("❌ 儲存失敗，請確認目錄有寫入權限。")
+
+        st.markdown("---")
+
         # 基準貨幣 + 年數
         cfg1, cfg2 = st.columns(2)
         base_currency = cfg1.selectbox(
             "基準貨幣",
             ["USD", "TWD", "JPY", "EUR", "HKD"],
+            key="port_base_currency",
             help="所有標的的價格與組合價值都將換算為此貨幣後計算。"
         )
         currency_symbol = CURRENCY_SYMBOLS.get(base_currency, "$")
-        years_back = cfg2.selectbox("回測年數", [1, 2, 3, 5, 7, 10, 15, 20], index=4)
+        years_back = cfg2.selectbox(
+            "回測年數", [1, 2, 3, 5, 7, 10, 15, 20],
+            key="port_years_back",
+        )
 
         # 初始資金（可為 0）
         initial = st.number_input(
             f"初始資金 ({base_currency})　（可設為 0，純靠定期定額累積）",
             min_value=0, max_value=100_000_000,
-            value=1_000_000, step=100_000, format="%d"
+            step=100_000, format="%d",
+            key="port_initial",
         )
 
         # DCA 定期定額設定
@@ -559,19 +601,21 @@ def render_portfolio_tab():
         dca1, dca2, dca3 = st.columns(3)
         port_dca_enable = dca1.toggle(
             "啟用定期定額",
-            value=False,
+            key="port_dca_enable",
             help="每期依設定金額，按當前權重比例追加買入各標的。"
         )
         if port_dca_enable:
             port_dca_amount = dca2.number_input(
                 f"每次投入金額 ({base_currency})",
                 min_value=100, max_value=10_000_000,
-                value=30_000, step=1_000, format="%d"
+                step=1_000, format="%d",
+                key="port_dca_amount",
             )
             port_dca_freq = dca3.selectbox(
                 "每月投入次數",
                 [1, 2, 4],
                 format_func=lambda x: {1:"1次（月投）", 2:"2次（雙週投）", 4:"4次（週投）"}[x],
+                key="port_dca_freq",
                 help="1次=每月初，2次=每兩週，4次=每週"
             )
             total_dca_est = initial + port_dca_amount * port_dca_freq * 12 * years_back
@@ -581,7 +625,7 @@ def render_portfolio_tab():
             )
         else:
             port_dca_amount = 0
-            port_dca_freq   = 1
+            port_dca_freq   = st.session_state.get("port_dca_freq", 1)
         end_dt     = datetime.today()
         start_dt   = end_dt.replace(year=end_dt.year - years_back)
         start_str  = start_dt.strftime("%Y-%m-%d")
@@ -594,16 +638,17 @@ def render_portfolio_tab():
         rebalance_freq = rb1.selectbox(
             "再平衡頻率",
             ["none", "monthly", "quarterly", "yearly"],
-            index=2,
             format_func=lambda x: {
                 "none": "不再平衡", "monthly": "每月",
                 "quarterly": "每季", "yearly": "每年"
             }[x],
+            key="port_rebalance_freq",
             help="定期將各資產比例調回設定權重。不再平衡則讓各資產自由漲跌。"
         )
         cash_return_pct = rb2.slider(
-            "現金年化利率（若配置現金）", 0.0, 6.0, 4.0, 0.5,
+            "現金年化利率（若配置現金）", 0.0, 6.0, step=0.5,
             format="%.1f%%",
+            key="port_cash_return_pct",
             help="將 CASH 加入組合時，此利率模擬貨幣基金或短期債券的無風險報酬。"
         )
 
@@ -613,19 +658,20 @@ def render_portfolio_tab():
         commission_pct = tc1.select_slider(
             "單邊手續費／滑價",
             options=[0.0, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0],
-            value=0.1,
             format_func=lambda x: f"{x:.2f}%",
+            key="port_commission_pct",
             help="每筆買入或賣出各扣一次。美股ETF建議 0.05~0.1%；台股含證交稅建議 0.1~0.2%。"
         )
         enable_div_tax = tc2.toggle(
             "美股股息預扣稅 30%",
-            value=False,
+            key="port_enable_div_tax",
             help="台灣居民投資美股，股息依條約預扣 30% 稅（非 ETF 配息稅）。開啟後每次配息日自動扣除稅額，影響長期複利約 0.5~1%/年。"
         )
         if enable_div_tax:
             div_tax_rate = tc3.slider(
-                "預扣稅率", 0, 30, 30, 1,
+                "預扣稅率", 0, 30, step=1,
                 format="%d%%",
+                key="port_div_tax_rate",
                 help="美台條約標準為 30%；若持有符合條件的退休帳戶（如 IRA）可設為 0%。"
             ) / 100
             tc2.caption("📌 需下載股息資料，初次執行較慢。")
@@ -636,37 +682,45 @@ def render_portfolio_tab():
         st.markdown("**📋 標的與權重設定**")
         st.caption("每行輸入一個標的代號與配置比例（%）。台股格式：2330.TW；現金請輸入 CASH。")
 
-        # 預設 2 個標的
-        defaults = [
-            ("VOO", 50),
-            ("QQQ", 50),
-        ]
+        # 儲存的標的數量 / 標的清單
+        saved_tickers = st.session_state.get("port_tickers", ["VOO", "QQQ"])
+        saved_weights = st.session_state.get("port_weights", [50, 50])
+        _default_n    = max(2, len(saved_tickers))
+
         n_assets = st.number_input("標的數量", min_value=2, max_value=10,
-                                   value=2, step=1)
+                                   step=1, key="port_n_assets")
+
+        # 當 n_assets 改變時，延伸 / 截斷已儲存清單
+        n = int(n_assets)
+        _tickers_defaults = (saved_tickers + [""] * n)[:n]
+        _weights_defaults = (saved_weights + [10] * n)[:n]
+
+        # 如果 pt_0 等 key 還不在 session_state，就預填儲存值
+        for i in range(n):
+            if f"pt_{i}" not in st.session_state:
+                st.session_state[f"pt_{i}"] = _tickers_defaults[i]
+            if f"pw_{i}" not in st.session_state:
+                st.session_state[f"pw_{i}"] = _weights_defaults[i]
 
         tickers_input = []
         weights_input = []
         cols_per_row  = 2
         asset_rows    = [
-            st.columns([2, 1, 2, 1]) if i + 1 < int(n_assets)
-            else st.columns([2, 1, 2, 1])
-            for i in range(0, int(n_assets), cols_per_row)
+            st.columns([2, 1, 2, 1])
+            for _ in range(0, n, cols_per_row)
         ]
 
         flat_cols = []
         for row in asset_rows:
             flat_cols.extend(row)
 
-        for idx in range(int(n_assets)):
+        for idx in range(n):
             col_t = flat_cols[idx * 2]
             col_w = flat_cols[idx * 2 + 1]
-            default_t = defaults[idx][0] if idx < len(defaults) else ""
-            default_w = defaults[idx][1] if idx < len(defaults) else 10
-            t = col_t.text_input(f"標的 {idx+1}", value=default_t,
+            t = col_t.text_input(f"標的 {idx+1}",
                                   key=f"pt_{idx}").upper().strip()
             w = col_w.number_input(f"比例 {idx+1} %", min_value=0,
-                                    max_value=100, value=default_w,
-                                    key=f"pw_{idx}")
+                                    max_value=100, key=f"pw_{idx}")
             if t:
                 tickers_input.append(t)
                 weights_input.append(w)

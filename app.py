@@ -12,6 +12,7 @@ from engine import (
 )
 from portfolio import render_portfolio_tab
 from retirement import render_retirement_tab
+from settings import init_session, save_settings
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -269,6 +270,8 @@ def _flush_pending_apply():
 def main():
     # ── 必須在所有 widget 渲染前執行，寫入套用設定 ──
     _flush_pending_apply()
+    # ── 從 JSON 載入上次儲存的回測設定（只在第一次執行）──
+    init_session("backtest", st.session_state)
     # 在任何 widget 渲染前取出所有 flag，避免 widget reconciliation rerun 時遺失
     # 用戶點了「立即回測」（一次性，pop 消耗）
     _do_backtest = st.session_state.pop("_do_backtest", False)
@@ -382,6 +385,27 @@ def main():
             format_func=lambda x: f"{x:.2f}%" if x > 0 else "0%（無成本）",
             help="每次買入或賣出時扣除的摩擦成本。\n美股 ETF 建議 0.05~0.1%，台股建議 0.1~0.2%（含證交稅），頻繁交易可設更高。"
         ) / 100   # 轉成小數
+
+        # ── 💾 儲存回測設定 ──
+        st.markdown("---")
+        if st.button("💾 儲存側邊欄設定", help="將股票代號、策略、參數等存至本機，下次開啟自動載入。"):
+            _bt_data = {k: st.session_state.get(k) for k in [
+                "w_ticker", "w_years", "w_display_currency", "w_initial",
+                "w_inv_mode", "w_dca_amount", "w_strategy_amount",
+                "w_buy_mode", "w_buy_amount", "w_buy_pct",
+                "w_sell_mode", "w_sell_amount", "w_sell_pct",
+                "w_strategy",
+                "w_ma_fast", "w_ma_slow",
+                "w_rsi_period", "w_rsi_buy", "w_rsi_sell",
+                "w_bb_period", "w_bb_std",
+                "w_macd_fast", "w_macd_slow", "w_macd_signal",
+                "w_dev_buy_period", "w_dev_sell_period", "w_dev_sell_pct",
+                "w_cool_period",
+            ] if st.session_state.get(k) is not None}
+            if save_settings("backtest", _bt_data):
+                st.success("✅ 設定已儲存！", icon="💾")
+            else:
+                st.error("❌ 儲存失敗")
 
         # 彙整投資設定
         inv_cfg = {

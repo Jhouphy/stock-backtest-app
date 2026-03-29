@@ -7,6 +7,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from settings import init_session, save_settings
 
 CHART = dict(
     paper_bgcolor="#ffffff",
@@ -247,17 +248,47 @@ def plot_asset_breakdown(df: pd.DataFrame, currency_symbol: str = "$") -> go.Fig
 # ═══════════════════════════════════════════════
 
 def render_retirement_tab():
+    # ── 初始化：第一次載入時從 JSON 注入 session_state ──
+    init_session("retirement", st.session_state)
+
     st.markdown("### 🏖️ 退休規劃計算器")
     st.caption("輸入個人財務狀況，試算達成財務自由的時間與資產軌跡。")
 
     with st.expander("⚙️ 基本設定", expanded=True):
 
+        # ── 儲存按鈕列 ──
+        save_col, status_col = st.columns([1, 3])
+        if save_col.button("💾 儲存目前設定", key="ret_save_btn",
+                           help="將目前所有設定存至本機 app_settings.json，下次開啟自動載入。"):
+            _data = {k: st.session_state.get(k)
+                     for k in [
+                         "ret_age_start", "ret_year_start", "ret_currency",
+                         "ret_years", "ret_initial", "ret_monthly_contrib",
+                         "ret_contrib_stop_age", "ret_annual_return_pct",
+                         "ret_inflation_pct", "ret_withdrawal_pct",
+                         "ret_monthly_expense", "ret_withdrawal_start_age",
+                     ]}
+            if save_settings("retirement", _data):
+                st.session_state["_ret_save_ok"] = True
+            else:
+                st.session_state["_ret_save_ok"] = False
+
+        if st.session_state.get("_ret_save_ok") is True:
+            status_col.success("✅ 設定已儲存！下次開啟 App 將自動載入。", icon="💾")
+        elif st.session_state.get("_ret_save_ok") is False:
+            status_col.error("❌ 儲存失敗，請確認目錄有寫入權限。")
+
+        st.markdown("---")
+
         # ── 第一行：基本資訊 ──
         r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-        age_start  = r1c1.number_input("目前年齡", 18, 80, 30, 1)
-        year_start = r1c2.number_input("起始年份", 2000, 2100, 2026, 1)
+        age_start  = r1c1.number_input("目前年齡", 18, 80, step=1,
+                                        key="ret_age_start")
+        year_start = r1c2.number_input("起始年份", 2000, 2100, step=1,
+                                        key="ret_year_start")
         currency   = r1c3.selectbox("計價貨幣",
-                        ["USD ($)", "TWD (NT$)", "JPY (¥)", "EUR (€)"])
+                        ["USD ($)", "TWD (NT$)", "JPY (¥)", "EUR (€)"],
+                        key="ret_currency")
         sym_map    = {"USD ($)": "$", "TWD (NT$)": "NT$",
                       "JPY (¥)": "¥", "EUR (€)": "€"}
         csym       = sym_map[currency]
@@ -267,7 +298,7 @@ def render_retirement_tab():
         _years_choice = r1c4.selectbox("試算年數（快選）", _preset_years, index=7)
         years = st.number_input(
             "或直接輸入試算年數", min_value=1, max_value=100,
-            value=_years_choice, step=1,
+            step=1, key="ret_years",
             help="可直接輸入任意年數，或用上方快選")
 
         st.markdown("---")
@@ -275,11 +306,14 @@ def render_retirement_tab():
         # ── 第二行：資金設定 ──
         r2c1, r2c2, r2c3 = st.columns(3)
         initial          = r2c1.number_input(
-            f"初始投資 ({csym})", 0, 1_000_000_000, 0, 100_000, format="%d")
+            f"初始投資 ({csym})", 0, 1_000_000_000, step=100_000, format="%d",
+            key="ret_initial")
         monthly_contrib  = r2c2.number_input(
-            f"每月投入 ({csym})", 0, 10_000_000, 0, 1_000, format="%d")
+            f"每月投入 ({csym})", 0, 10_000_000, step=1_000, format="%d",
+            key="ret_monthly_contrib")
         contrib_stop_age = r2c3.number_input(
-            "幾歲停止投入（0=持續至財務自由）", 0, 100, 0, 1,
+            "幾歲停止投入（0=持續至財務自由）", 0, 100, step=1,
+            key="ret_contrib_stop_age",
             help="設 0 表示持續投入直到達成財務自由為止")
 
         st.markdown("---")
@@ -287,11 +321,14 @@ def render_retirement_tab():
         # ── 第三行：報酬率設定 ──
         r3c1, r3c2, r3c3 = st.columns(3)
         annual_return_pct = r3c1.slider(
-            "預估年化報酬率", 0.0, 20.0, 0.0, 0.5, format="%.1f%%")
+            "預估年化報酬率", 0.0, 20.0, step=0.5, format="%.1f%%",
+            key="ret_annual_return_pct")
         inflation_pct = r3c2.slider(
-            "通貨膨脹率 / 年", 0.0, 10.0, 0.0, 0.5, format="%.1f%%")
+            "通貨膨脹率 / 年", 0.0, 10.0, step=0.5, format="%.1f%%",
+            key="ret_inflation_pct")
         withdrawal_pct = r3c3.slider(
-            "提領率（4% 法則）", 1.0, 10.0, 1.0, 0.5, format="%.1f%%",
+            "提領率（4% 法則）", 1.0, 10.0, step=0.5, format="%.1f%%",
+            key="ret_withdrawal_pct",
             help="財務自由後每年從資產中提領的比例。4% 為常見標準。")
 
         st.markdown("---")
@@ -300,13 +337,15 @@ def render_retirement_tab():
         st.markdown("**🏠 生活開銷 & 提領設定**")
         exp_c1, exp_c2, exp_c3 = st.columns(3)
         monthly_expense = exp_c1.number_input(
-            f"月生活開銷 ({csym})（現值）", 0, 10_000_000, 0, 1_000, format="%d",
+            f"月生活開銷 ({csym})（現值）", 0, 10_000_000, step=1_000, format="%d",
+            key="ret_monthly_expense",
             help="目前每月的生活開銷，計算時會按通膨率逐年調整。")
 
         # 提領起始年齡：預設為「停止投入年齡」
         _default_wd = contrib_stop_age if contrib_stop_age > 0 else 0
         withdrawal_start_age = exp_c2.number_input(
-            "幾歲開始提領（0=停止投入後立即）", 0, 100, _default_wd, 1,
+            "幾歲開始提領（0=停止投入後立即）", 0, 100, step=1,
+            key="ret_withdrawal_start_age",
             help="設為 0 或與「停止投入年齡」相同，表示停止投入後立即開始提領。\n"
                  "也可以設為晚幾年，讓資產繼續累積一段時間再提領。")
 
