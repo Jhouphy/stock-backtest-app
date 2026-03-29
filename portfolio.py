@@ -584,14 +584,7 @@ def render_portfolio_tab():
         )
         currency_symbol = CURRENCY_SYMBOLS.get(base_currency, "$")
         years_back = cfg2.selectbox(
-        # 使用 number_input 格式，與退休規劃頁面一致，支援手動輸入與最高 50 年
-p_years = col2.number_input(
-    "回測年數", 
-    min_value=1, 
-    max_value=50, 
-    value=int(st.session_state.portfolio.get("p_years", 5)), 
-    step=1
-)
+            "回測年數", [1, 2, 3, 5, 7, 10, 15, 20],
             key="port_years_back",
         )
 
