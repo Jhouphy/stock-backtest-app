@@ -1,16 +1,24 @@
 """
 settings.py
-本地設定持久化模組 — 儲存／載入各頁面的使用者設定至 app_settings.json
+本地設定持久化模組 — 將設定儲存至使用者的瀏覽器 Cookie
+伺服器重啟 / App 休眠喚醒後設定依然保留，跟著瀏覽器走。
 """
 
 import json
-from pathlib import Path
+import datetime
+import streamlit as st
 
-# 設定檔路徑：與 app.py 同目錄
-SETTINGS_FILE = Path(__file__).parent / "app_settings.json"
+# ── Cookie 管理器（cached，確保整個 App 只建立一個實例）──
+@st.cache_resource
+def _get_cookie_manager():
+    try:
+        import extra_streamlit_components as stx
+        return stx.CookieManager()
+    except Exception:
+        return None
 
 # ──────────────────────────────────────────────
-# 各命名空間的預設值（新裝置或設定檔損毀時使用）
+# 各命名空間的預設值（Cookie 不存在或損毀時使用）
 # ──────────────────────────────────────────────
 DEFAULTS: dict[str, dict] = {
     "backtest": {
@@ -60,32 +68,37 @@ DEFAULTS: dict[str, dict] = {
         "port_weights":         [50, 50],
     },
     "retirement": {
-        "ret_age_start":          30,
-        "ret_year_start":         2026,
-        "ret_currency":           "TWD (NT$)",
-        "ret_years":              50,
-        "ret_initial":            0,
-        "ret_monthly_contrib":    0,
-        "ret_contrib_stop_age":   0,
-        "ret_annual_return_pct":  7.0,
-        "ret_inflation_pct":      2.0,
-        "ret_withdrawal_pct":     4.0,
-        "ret_monthly_expense":    0,
+        "ret_age_start":            30,
+        "ret_year_start":           2026,
+        "ret_currency":             "TWD (NT$)",
+        "ret_years":                50,
+        "ret_initial":              0,
+        "ret_monthly_contrib":      0,
+        "ret_contrib_stop_age":     0,
+        "ret_annual_return_pct":    7.0,
+        "ret_inflation_pct":        2.0,
+        "ret_withdrawal_pct":       4.0,
+        "ret_monthly_expense":      0,
         "ret_withdrawal_start_age": 0,
     },
 }
 
+# Cookie 名稱（每個命名空間各一個，避免單一 Cookie 超過 4KB 限制）
+def _cookie_name(namespace: str) -> str:
+    return f"stockapp_{namespace}"
+
 
 def load_settings(namespace: str) -> dict:
-    """載入指定命名空間的設定，找不到時回傳預設值。"""
+    """從瀏覽器 Cookie 載入設定，找不到時回傳預設值。"""
     defaults = DEFAULTS.get(namespace, {})
-    if not SETTINGS_FILE.exists():
+    cm = _get_cookie_manager()
+    if cm is None:
         return defaults.copy()
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            all_settings = json.load(f)
-        saved = all_settings.get(namespace, {})
-        # 以預設值為底，覆蓋已儲存的值（保證所有 key 都存在）
+        raw = cm.get(cookie=_cookie_name(namespace))
+        if not raw:
+            return defaults.copy()
+        saved = json.loads(raw) if isinstance(raw, str) else raw
         merged = defaults.copy()
         merged.update(saved)
         return merged
@@ -94,18 +107,17 @@ def load_settings(namespace: str) -> dict:
 
 
 def save_settings(namespace: str, data: dict) -> bool:
-    """將設定寫入 JSON 檔案，回傳是否成功。"""
-    all_settings: dict = {}
-    if SETTINGS_FILE.exists():
-        try:
-            with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-                all_settings = json.load(f)
-        except Exception:
-            pass
-    all_settings[namespace] = data
+    """將設定寫入瀏覽器 Cookie（保存 365 天）。"""
+    cm = _get_cookie_manager()
+    if cm is None:
+        return False
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(all_settings, f, ensure_ascii=False, indent=2)
+        expire_date = datetime.datetime.now() + datetime.timedelta(days=365)
+        cm.set(
+            cookie=_cookie_name(namespace),
+            val=json.dumps(data, ensure_ascii=False),
+            expires_at=expire_date,
+        )
         return True
     except Exception:
         return False
@@ -113,7 +125,7 @@ def save_settings(namespace: str, data: dict) -> bool:
 
 def init_session(namespace: str, st_session) -> None:
     """
-    第一次進入頁面時，把儲存的設定注入 st.session_state。
+    第一次進入頁面時，把 Cookie 中的設定注入 st.session_state。
     已存在的 key 不覆蓋（尊重使用者在本次 session 中的修改）。
     """
     flag = f"_settings_loaded_{namespace}"
