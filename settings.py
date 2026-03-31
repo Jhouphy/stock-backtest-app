@@ -1,34 +1,21 @@
 """
 settings.py
-本地設定持久化模組 — 將設定儲存至使用者的瀏覽器 Cookie
-伺服器重啟 / App 休眠喚醒後設定依然保留，跟著瀏覽器走。
+設定持久化模組 — 零外部依賴版
+儲存策略：優先嘗試瀏覽器 Cookie（需安裝 extra-streamlit-components），
+          若套件不存在則自動降級為 JSON 檔案儲存。
 """
 
 import json
 import datetime
-import streamlit as st
+from pathlib import Path
 
-
-def _get_cookie_manager():
-    """
-    取得 CookieManager 實例。
-    存在 st.session_state 而非 @st.cache_resource，
-    避免 CachedWidgetWarning（cache 內不可呼叫 widget）。
-    """
-    if "_cookie_manager" not in st.session_state:
-        try:
-            import extra_streamlit_components as stx
-            # key 固定，確保同一 session 只建立一次
-            st.session_state["_cookie_manager"] = stx.CookieManager(key="_cm")
-        except Exception:
-            st.session_state["_cookie_manager"] = None
-    return st.session_state["_cookie_manager"]
-
+# JSON 備用路徑
+_SETTINGS_FILE = Path(__file__).parent / "app_settings.json"
 
 # ──────────────────────────────────────────────
-# 各命名空間的預設值（Cookie 不存在或損毀時使用）
+# 預設值
 # ──────────────────────────────────────────────
-DEFAULTS: dict[str, dict] = {
+DEFAULTS: dict = {
     "backtest": {
         "w_ticker":           "VOO",
         "w_years":            5,
@@ -95,53 +82,91 @@ DEFAULTS: dict[str, dict] = {
 }
 
 
+# ── Cookie 管理器（懶加載，失敗自動降級）──
+def _get_cookie_manager():
+    try:
+        import streamlit as st
+        if "_cookie_manager" not in st.session_state:
+            import extra_streamlit_components as stx
+            st.session_state["_cookie_manager"] = stx.CookieManager(key="_cm")
+        return st.session_state["_cookie_manager"]
+    except Exception:
+        return None
+
+
 def _cookie_name(namespace: str) -> str:
-    """每個命名空間各一個 Cookie，避免超過 4KB 限制。"""
     return f"stockapp_{namespace}"
 
 
-
-
+# ── 讀取設定（Cookie → JSON → 預設值，依序 fallback）──
 def load_settings(namespace: str) -> dict:
-    """從瀏覽器 Cookie 載入設定，找不到時回傳預設值。"""
     defaults = DEFAULTS.get(namespace, {})
+
+    # 1. 嘗試從 Cookie 讀取
     cm = _get_cookie_manager()
-    if cm is None:
-        return defaults.copy()
-    try:
-        raw = cm.get(cookie=_cookie_name(namespace))
-        if not raw:
-            return defaults.copy()
-        saved = json.loads(raw) if isinstance(raw, str) else raw
-        merged = defaults.copy()
-        merged.update(saved)
-        return merged
-    except Exception:
-        return defaults.copy()
+    if cm is not None:
+        try:
+            raw = cm.get(cookie=_cookie_name(namespace))
+            if raw:
+                saved = json.loads(raw) if isinstance(raw, str) else raw
+                merged = defaults.copy()
+                merged.update(saved)
+                return merged
+        except Exception:
+            pass
+
+    # 2. 降級：從 JSON 檔案讀取
+    if _SETTINGS_FILE.exists():
+        try:
+            with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                all_settings = json.load(f)
+            saved = all_settings.get(namespace, {})
+            merged = defaults.copy()
+            merged.update(saved)
+            return merged
+        except Exception:
+            pass
+
+    # 3. 最終 fallback：預設值
+    return defaults.copy()
 
 
+# ── 儲存設定（Cookie → JSON，依序嘗試）──
 def save_settings(namespace: str, data: dict) -> bool:
-    """將設定寫入瀏覽器 Cookie（保存 365 天）。"""
+    saved_cookie = False
+
+    # 1. 嘗試寫入 Cookie
     cm = _get_cookie_manager()
-    if cm is None:
-        return False
+    if cm is not None:
+        try:
+            expire_date = datetime.datetime.now() + datetime.timedelta(days=365)
+            cm.set(
+                cookie=_cookie_name(namespace),
+                val=json.dumps(data, ensure_ascii=False),
+                expires_at=expire_date,
+            )
+            saved_cookie = True
+        except Exception:
+            pass
+
+    # 2. 同時寫入 JSON（備份）
     try:
-        expire_date = datetime.datetime.now() + datetime.timedelta(days=365)
-        cm.set(
-            cookie=_cookie_name(namespace),
-            val=json.dumps(data, ensure_ascii=False),
-            expires_at=expire_date,
-        )
+        all_settings: dict = {}
+        if _SETTINGS_FILE.exists():
+            with open(_SETTINGS_FILE, "r", encoding="utf-8") as f:
+                all_settings = json.load(f)
+        all_settings[namespace] = data
+        with open(_SETTINGS_FILE, "w", encoding="utf-8") as f:
+            json.dump(all_settings, f, ensure_ascii=False, indent=2)
         return True
     except Exception:
-        return False
+        pass
+
+    return saved_cookie
 
 
+# ── 注入 session_state（每個 namespace 只執行一次）──
 def init_session(namespace: str, st_session) -> None:
-    """
-    第一次進入頁面時，把 Cookie 中的設定注入 st.session_state。
-    已存在的 key 不覆蓋（尊重使用者在本次 session 中的修改）。
-    """
     flag = f"_settings_loaded_{namespace}"
     if st_session.get(flag):
         return
