@@ -100,12 +100,6 @@ def _cookie_name(namespace: str) -> str:
     return f"stockapp_{namespace}"
 
 
-def setup_cookie_manager():
-    """
-    在 app.py 的 main() 最頂端呼叫一次。
-    把 CookieManager 的隱藏元件渲染在固定位置，避免在畫面中間閃現。
-    """
-    _get_cookie_manager()  # 建立並存入 session_state
 
 
 def load_settings(namespace: str) -> dict:
