@@ -32,12 +32,17 @@ def calc_retirement(
     monthly_expense: float,
     years: int = 50,
     contrib_stop_age: int = 0,
-    withdrawal_start_age: int = 0,   # 幾歲開始提領（0 = 停止投入後自動開始）
+    withdrawal_start_age: int = 0,
+    # ── 三階段新增參數 ──
+    reduce_contrib_age: int = 0,       # 幾歲開始減少投入（0=不啟用）
+    reduced_monthly_contrib: float = 0, # 減少後的每月投入金額
 ) -> pd.DataFrame:
     """
-    兩階段模型：
-    1. 累積期：持續投入，資產複利成長
-    2. 提領期：停止投入，每年按提領率提領（含通膨調整）
+    三階段模型：
+    1. 全額投入期：age_start → reduce_contrib_age（monthly_contrib）
+    2. 減少投入期：reduce_contrib_age → contrib_stop_age（reduced_monthly_contrib）
+       若未啟用減少，則直接從全額投入跳至停止
+    3. 提領期：contrib_stop_age 後按提領率提領（含通膨調整）
     財務自由條件：可提領金額 ≥ 當年生活開銷
     """
     rows = []
@@ -46,8 +51,10 @@ def calc_retirement(
     fi_year = None
     fi_age  = None
 
-    # 決定提領起始年齡
-    _stop = contrib_stop_age if contrib_stop_age > 0 else 9999
+    # 決定各階段門檻
+    _reduce = reduce_contrib_age if reduce_contrib_age > 0 else 9999
+    _stop   = contrib_stop_age   if contrib_stop_age   > 0 else 9999
+    # 提領起始：若未設定則緊接停止投入
     _wd_start = withdrawal_start_age if withdrawal_start_age > 0 else _stop
 
     for yr in range(years):
@@ -57,13 +64,22 @@ def calc_retirement(
         # 當年生活開銷（含通膨）
         expense_annual = monthly_expense * 12 * (1 + inflation) ** yr
 
-        # ── 累積期：投入 ──
-        in_contrib_phase = age < _stop
-        if in_contrib_phase and monthly_contrib > 0:
-            contrib_fv = monthly_contrib * (
+        # ── 判斷當前投入金額（三階段）──
+        if age >= _stop:
+            _contrib = 0.0          # 階段 3：停止投入
+            phase    = "stop"
+        elif age >= _reduce:
+            _contrib = reduced_monthly_contrib  # 階段 2：減少投入
+            phase    = "reduce"
+        else:
+            _contrib = monthly_contrib          # 階段 1：全額投入
+            phase    = "full"
+
+        if _contrib > 0:
+            contrib_fv = _contrib * (
                 ((1 + monthly_r) ** 12 - 1) / monthly_r
-            ) if monthly_r > 0 else monthly_contrib * 12
-            contrib_annual = monthly_contrib * 12
+            ) if monthly_r > 0 else _contrib * 12
+            contrib_annual = _contrib * 12
         else:
             contrib_fv     = 0.0
             contrib_annual = 0.0
@@ -75,11 +91,11 @@ def calc_retirement(
 
         # ── 提領期：從資產中扣除提領金額 ──
         in_withdrawal_phase = age >= _wd_start
-        withdrawal_amount = 0.0
+        withdrawal_amount   = 0.0
         asset_after_withdrawal = asset_growth
 
         if in_withdrawal_phase:
-            withdrawal_amount = asset_growth * withdrawal_rate
+            withdrawal_amount      = asset_growth * withdrawal_rate
             asset_after_withdrawal = asset_growth - withdrawal_amount
 
         asset = asset_after_withdrawal
@@ -94,25 +110,28 @@ def calc_retirement(
             fi_age  = age
 
         rows.append({
-            "年齡":          age,
-            "年度":          yr,
-            "年份":          year,
-            "生活開銷":      expense_annual,
-            "投資價值":      asset,                    # 提領後資產
-            "投資價值_提領前": asset_growth,           # 提領前資產（用於財務自由線）
-            "投資回報":      invest_return,
-            "可提領金額":    fi_income,
-            "實際提領金額":  withdrawal_amount,
-            "年投入":        contrib_annual,
-            "財務自由了嗎":  "YES!!" if is_fi else "No",
-            "提領中":        in_withdrawal_phase,
-            "_fi":           is_fi,
+            "年齡":           age,
+            "年度":           yr,
+            "年份":           year,
+            "生活開銷":       expense_annual,
+            "投資價值":       asset,
+            "投資價值_提領前": asset_growth,
+            "投資回報":       invest_return,
+            "可提領金額":     fi_income,
+            "實際提領金額":   withdrawal_amount,
+            "年投入":         contrib_annual,
+            "投入階段":       phase,
+            "財務自由了嗎":   "YES!!" if is_fi else "No",
+            "提領中":         in_withdrawal_phase,
+            "_fi":            is_fi,
         })
 
     df = pd.DataFrame(rows)
-    df.attrs["fi_year"]   = fi_year
-    df.attrs["fi_age"]    = fi_age
-    df.attrs["wd_start"]  = _wd_start
+    df.attrs["fi_year"]      = fi_year
+    df.attrs["fi_age"]       = fi_age
+    df.attrs["wd_start"]     = _wd_start
+    df.attrs["reduce_age"]   = reduce_contrib_age if reduce_contrib_age > 0 else None
+    df.attrs["stop_age"]     = contrib_stop_age   if contrib_stop_age   > 0 else None
     return df
 
 
@@ -264,9 +283,11 @@ def render_retirement_tab():
                      for k in [
                          "ret_age_start", "ret_year_start", "ret_currency",
                          "ret_years", "ret_initial", "ret_monthly_contrib",
-                         "ret_contrib_stop_age", "ret_annual_return_pct",
-                         "ret_inflation_pct", "ret_withdrawal_pct",
-                         "ret_monthly_expense", "ret_withdrawal_start_age",
+                         "ret_contrib_change_mode", "ret_contrib_stop_age",
+                         "ret_reduce_contrib_age", "ret_reduced_monthly_contrib",
+                         "ret_annual_return_pct", "ret_inflation_pct",
+                         "ret_withdrawal_pct", "ret_monthly_expense",
+                         "ret_withdrawal_start_age",
                      ]}
             if save_settings("retirement", _data):
                 st.session_state["_ret_save_ok"] = True
@@ -304,17 +325,56 @@ def render_retirement_tab():
         st.markdown("---")
 
         # ── 第二行：資金設定 ──
-        r2c1, r2c2, r2c3 = st.columns(3)
-        initial          = r2c1.number_input(
+        r2c1, r2c2 = st.columns(2)
+        initial         = r2c1.number_input(
             f"初始投資 ({csym})", 0, 1_000_000_000, step=100_000, format="%d",
             key="ret_initial")
-        monthly_contrib  = r2c2.number_input(
-            f"每月投入 ({csym})", 0, 10_000_000, step=1_000, format="%d",
+        monthly_contrib = r2c2.number_input(
+            f"每月投入 ({csym})（第一階段）", 0, 10_000_000, step=1_000, format="%d",
             key="ret_monthly_contrib")
-        contrib_stop_age = r2c3.number_input(
-            "幾歲停止投入（0=持續至財務自由）", 0, 100, step=1,
-            key="ret_contrib_stop_age",
-            help="設 0 表示持續投入直到達成財務自由為止")
+
+        # ── 投入變化設定（三階段）──
+        st.markdown("**📉 投入變化設定（可選）**")
+        ph1, ph2 = st.columns([1, 3])
+        contrib_change_mode = ph1.radio(
+            "變化方式",
+            ["不變化", "停止投入", "減少投入"],
+            key="ret_contrib_change_mode",
+            help="「停止投入」：到達設定年齡後直接停止。「減少投入」：先降低投入額，之後再完全停止。",
+        )
+
+        # 依模式顯示對應欄位
+        reduce_contrib_age      = 0
+        reduced_monthly_contrib = 0
+        contrib_stop_age        = 0
+
+        if contrib_change_mode == "停止投入":
+            with ph2:
+                contrib_stop_age = st.number_input(
+                    "幾歲停止投入（0=持續至財務自由）", 0, 100, step=1,
+                    key="ret_contrib_stop_age",
+                    help="設 0 表示持續投入直到達成財務自由為止")
+        elif contrib_change_mode == "減少投入":
+            with ph2:
+                rc1, rc2, rc3 = st.columns(3)
+                reduce_contrib_age = rc1.number_input(
+                    "幾歲開始減少投入", 1, 100, step=1,
+                    key="ret_reduce_contrib_age",
+                    help="從此年齡起，每月投入改為下方設定的較低金額。")
+                reduced_monthly_contrib = rc2.number_input(
+                    f"減少後每月投入 ({csym})", 0, 10_000_000, step=1_000, format="%d",
+                    key="ret_reduced_monthly_contrib",
+                    help="第二階段的每月投入金額，需小於第一階段。")
+                contrib_stop_age = rc3.number_input(
+                    "幾歲完全停止投入（0=持續）", 0, 100, step=1,
+                    key="ret_contrib_stop_age",
+                    help="從此年齡起完全停止投入，設 0 表示第二階段持續至模擬結束。")
+
+            # 邏輯警告
+            if reduce_contrib_age > 0 and contrib_stop_age > 0 and reduce_contrib_age >= contrib_stop_age:
+                st.warning("⚠️ 「開始減少」年齡需早於「完全停止」年齡。")
+            if reduced_monthly_contrib >= monthly_contrib and monthly_contrib > 0:
+                st.caption("💡 提示：減少後的金額應小於第一階段才有意義。")
 
         st.markdown("---")
 
@@ -369,17 +429,19 @@ def render_retirement_tab():
 
     # ── 執行計算 ──
     df = calc_retirement(
-        age_start            = age_start,
-        year_start           = year_start,
-        initial              = initial,
-        monthly_contrib      = monthly_contrib,
-        annual_return        = annual_return_pct / 100,
-        inflation            = inflation_pct / 100,
-        withdrawal_rate      = withdrawal_pct / 100,
-        monthly_expense      = monthly_expense,
-        years                = int(years),
-        contrib_stop_age     = contrib_stop_age,
-        withdrawal_start_age = withdrawal_start_age,
+        age_start               = age_start,
+        year_start              = year_start,
+        initial                 = initial,
+        monthly_contrib         = monthly_contrib,
+        annual_return           = annual_return_pct / 100,
+        inflation               = inflation_pct / 100,
+        withdrawal_rate         = withdrawal_pct / 100,
+        monthly_expense         = monthly_expense,
+        years                   = int(years),
+        contrib_stop_age        = contrib_stop_age,
+        withdrawal_start_age    = withdrawal_start_age,
+        reduce_contrib_age      = reduce_contrib_age,
+        reduced_monthly_contrib = reduced_monthly_contrib,
     )
 
     fi_year = df.attrs.get("fi_year")
