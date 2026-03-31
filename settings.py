@@ -8,14 +8,22 @@ import json
 import datetime
 import streamlit as st
 
-# ── Cookie 管理器（cached，確保整個 App 只建立一個實例）──
-@st.cache_resource
+
 def _get_cookie_manager():
-    try:
-        import extra_streamlit_components as stx
-        return stx.CookieManager()
-    except Exception:
-        return None
+    """
+    取得 CookieManager 實例。
+    存在 st.session_state 而非 @st.cache_resource，
+    避免 CachedWidgetWarning（cache 內不可呼叫 widget）。
+    """
+    if "_cookie_manager" not in st.session_state:
+        try:
+            import extra_streamlit_components as stx
+            # key 固定，確保同一 session 只建立一次
+            st.session_state["_cookie_manager"] = stx.CookieManager(key="_cm")
+        except Exception:
+            st.session_state["_cookie_manager"] = None
+    return st.session_state["_cookie_manager"]
+
 
 # ──────────────────────────────────────────────
 # 各命名空間的預設值（Cookie 不存在或損毀時使用）
@@ -83,9 +91,18 @@ DEFAULTS: dict[str, dict] = {
     },
 }
 
-# Cookie 名稱（每個命名空間各一個，避免單一 Cookie 超過 4KB 限制）
+
 def _cookie_name(namespace: str) -> str:
+    """每個命名空間各一個 Cookie，避免超過 4KB 限制。"""
     return f"stockapp_{namespace}"
+
+
+def setup_cookie_manager():
+    """
+    在 app.py 的 main() 最頂端呼叫一次。
+    把 CookieManager 的隱藏元件渲染在固定位置，避免在畫面中間閃現。
+    """
+    _get_cookie_manager()  # 建立並存入 session_state
 
 
 def load_settings(namespace: str) -> dict:

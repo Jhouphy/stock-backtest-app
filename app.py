@@ -12,7 +12,7 @@ from engine import (
 )
 from portfolio import render_portfolio_tab
 from retirement import render_retirement_tab
-from settings import init_session, save_settings
+from settings import init_session, save_settings, setup_cookie_manager
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
@@ -268,6 +268,8 @@ def _flush_pending_apply():
             st.session_state[key] = int(v) if isinstance(v, float) and v == int(v) else v
 
 def main():
+    # ── CookieManager 初始化（必須最先執行，固定渲染位置避免閃爍）──
+    setup_cookie_manager()
     # ── 必須在所有 widget 渲染前執行，寫入套用設定 ──
     _flush_pending_apply()
     # ── 從 JSON 載入上次儲存的回測設定（只在第一次執行）──
